@@ -1,0 +1,46 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: aether-powerdns
+  namespace: aether-system
+  labels:
+    app.kubernetes.io/name: aether-powerdns
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: aether-powerdns
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: aether-powerdns
+    spec:
+      serviceAccountName: aether-powerdns
+      containers:
+        - name: operator
+          image: ghcr.io/plane-shift/aether-powerdns:latest
+          imagePullPolicy: Always
+          args:
+            - --metrics-bind-address=:8080
+            - --health-probe-bind-address=:8081
+          ports:
+            - { name: metrics, containerPort: 8080, protocol: TCP }
+            - { name: health,  containerPort: 8081, protocol: TCP }
+          livenessProbe:
+            httpGet: { path: /healthz, port: health }
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          readinessProbe:
+            httpGet: { path: /readyz, port: health }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits:   { memory: 256Mi }
+          securityContext:
+            runAsNonRoot: true
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]

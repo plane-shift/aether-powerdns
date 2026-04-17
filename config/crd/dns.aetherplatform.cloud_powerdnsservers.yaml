@@ -1,0 +1,204 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: powerdnsservers.dns.aetherplatform.cloud
+spec:
+  group: dns.aetherplatform.cloud
+  names:
+    kind: PowerDNSServer
+    listKind: PowerDNSServerList
+    plural: powerdnsservers
+    singular: powerdnsserver
+    shortNames: [pdns]
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - jsonPath: .status.phase
+          name: Phase
+          type: string
+        - jsonPath: .spec.backend.type
+          name: Backend
+          type: string
+        - jsonPath: .status.readyReplicas
+          name: Ready
+          type: integer
+        - jsonPath: .status.desiredReplicas
+          name: Desired
+          type: integer
+        - jsonPath: .status.dnsEndpoint
+          name: DNS
+          type: string
+        - jsonPath: .status.apiEndpoint
+          name: API
+          type: string
+        - jsonPath: .metadata.creationTimestamp
+          name: Age
+          type: date
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            apiVersion: { type: string }
+            kind: { type: string }
+            metadata: { type: object }
+            spec:
+              type: object
+              required: [backend]
+              properties:
+                replicas:
+                  type: integer
+                  format: int32
+                  minimum: 1
+                  default: 1
+                image:
+                  type: string
+                resources:
+                  type: object
+                  x-kubernetes-preserve-unknown-fields: true
+                backend:
+                  type: object
+                  required: [type]
+                  x-kubernetes-validations:
+                    - rule: "self.type == oldSelf.type"
+                      message: "backend.type is immutable after creation"
+                  properties:
+                    type:
+                      type: string
+                      enum: [postgres, mysql]
+                      default: postgres
+                    postgres:
+                      type: object
+                      properties:
+                        instances:
+                          type: integer
+                          format: int32
+                          minimum: 1
+                          default: 1
+                        storageSize:
+                          type: string
+                          default: 5Gi
+                        storageClass:
+                          type: string
+                        byo:
+                          type: object
+                          required: [host, credentialsSecretRef]
+                          properties:
+                            host: { type: string }
+                            port:
+                              type: integer
+                              format: int32
+                              default: 5432
+                            database:
+                              type: string
+                              default: powerdns
+                            credentialsSecretRef:
+                              type: object
+                              required: [name]
+                              properties:
+                                name: { type: string }
+                            sslMode: { type: string }
+                dns:
+                  type: object
+                  properties:
+                    exposure:
+                      type: string
+                      enum: [none, loadBalancer, gateway]
+                      default: none
+                    loadBalancer:
+                      type: object
+                      properties:
+                        ip: { type: string }
+                        annotations:
+                          type: object
+                          additionalProperties: { type: string }
+                        externalTrafficPolicy:
+                          type: string
+                          enum: [Cluster, Local]
+                          default: Local
+                    gateway:
+                      type: object
+                      required: [parentRef]
+                      properties:
+                        parentRef:
+                          type: object
+                          required: [name]
+                          properties:
+                            name: { type: string }
+                            namespace: { type: string }
+                        tcpSectionName: { type: string }
+                        udpSectionName: { type: string }
+                api:
+                  type: object
+                  properties:
+                    port:
+                      type: integer
+                      format: int32
+                      default: 8081
+                    apiKeySecretRef:
+                      type: object
+                      required: [name]
+                      properties:
+                        name: { type: string }
+                scheduling:
+                  type: object
+                  properties:
+                    nodeSelector:
+                      type: object
+                      additionalProperties: { type: string }
+                    tolerations:
+                      type: array
+                      items:
+                        type: object
+                        x-kubernetes-preserve-unknown-fields: true
+                    priorityClassName: { type: string }
+                    spreadAcrossZones: { type: boolean, default: false }
+                observability:
+                  type: object
+                  properties:
+                    podMonitor:
+                      type: object
+                      properties:
+                        enabled: { type: boolean, default: false }
+                        interval: { type: string, default: "30s" }
+                        labels:
+                          type: object
+                          additionalProperties: { type: string }
+                networkPolicy:
+                  type: object
+                  properties:
+                    enabled: { type: boolean, default: false }
+                    additionalAllowedAPINamespaces:
+                      type: array
+                      items: { type: string }
+            status:
+              type: object
+              properties:
+                phase: { type: string }
+                ready: { type: boolean }
+                dnsEndpoint: { type: string }
+                apiEndpoint: { type: string }
+                apiKeySecretName: { type: string }
+                backendSecretName: { type: string }
+                schemaApplied: { type: boolean }
+                desiredReplicas: { type: integer, format: int32 }
+                readyReplicas: { type: integer, format: int32 }
+                configHash: { type: string }
+                failureMessage: { type: string }
+                conditions:
+                  type: array
+                  items:
+                    type: object
+                    required: [type, status, reason, message, lastTransitionTime]
+                    properties:
+                      type: { type: string }
+                      status: { type: string, enum: ["True", "False", "Unknown"] }
+                      reason: { type: string }
+                      message: { type: string }
+                      lastTransitionTime: { type: string, format: date-time }
+                      observedGeneration: { type: integer, format: int64 }

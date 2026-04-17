@@ -1,0 +1,36 @@
+# Bring-your-own Postgres + Gateway API exposure (TCPRoute + UDPRoute).
+# The Secret must contain `username` and `password` keys.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: pdns-byo-creds
+  namespace: aether-system
+type: Opaque
+stringData:
+  username: powerdns
+  password: change-me
+---
+apiVersion: dns.aetherplatform.cloud/v1alpha1
+kind: PowerDNSServer
+metadata:
+  name: byo
+  namespace: aether-system
+spec:
+  backend:
+    type: postgres
+    postgres:
+      byo:
+        host: postgres.example.internal
+        port: 5432
+        database: powerdns
+        sslMode: require
+        credentialsSecretRef:
+          name: pdns-byo-creds
+  dns:
+    exposure: gateway
+    gateway:
+      parentRef:
+        name: aether-edge
+        namespace: gateway-system
+      tcpSectionName: dns-tcp
+      udpSectionName: dns-udp

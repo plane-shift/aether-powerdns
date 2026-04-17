@@ -1,0 +1,19 @@
+# Operator-managed CloudNativePG backend, exposed via MetalLB LoadBalancer.
+apiVersion: dns.aetherplatform.cloud/v1alpha1
+kind: PowerDNSServer
+metadata:
+  name: demo
+  namespace: aether-system
+spec:
+  replicas: 1
+  backend:
+    type: postgres
+    postgres:
+      instances: 1
+      storageSize: 5Gi
+  dns:
+    exposure: loadBalancer
+    loadBalancer:
+      annotations:
+        metallb.io/address-pool: aether-public
+      externalTrafficPolicy: Local
