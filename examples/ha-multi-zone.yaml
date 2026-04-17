@@ -1,0 +1,25 @@
+# 3-replica HA setup with PodDisruptionBudget, hostname + zone topology
+# spread, and system-cluster-critical priority. Requires nodes in 3+
+# different topology.kubernetes.io/zone values for the spread to actually
+# bite.
+apiVersion: dns.aetherplatform.cloud/v1alpha1
+kind: PowerDNSServer
+metadata:
+  name: ha
+  namespace: aether-system
+spec:
+  replicas: 3
+  backend:
+    type: postgres
+    postgres:
+      instances: 3              # CNPG with 3 instances for backend HA
+      storageSize: 20Gi
+  dns:
+    exposure: loadBalancer
+    loadBalancer:
+      annotations:
+        metallb.io/address-pool: aether-public
+      externalTrafficPolicy: Local
+  scheduling:
+    priorityClassName: system-cluster-critical
+    spreadAcrossZones: true

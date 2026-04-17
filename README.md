@@ -8,6 +8,15 @@ keys are managed out of band — call the PowerDNS HTTP API with the generated
 key, or run `pdnsutil` via `kubectl exec`. This keeps the CRD surface tiny and
 lets users use every PowerDNS record type without operator changes.
 
+## Documentation
+
+- [Getting started](docs/getting-started.md) — install, deploy, smoke-test
+- [Configuration reference](docs/configuration.md) — every spec field
+- [Managing zones and records](docs/managing-zones.md) — HTTP API + `pdnsutil` recipes
+- [Operations](docs/operations.md) — scaling, upgrades, key rotation, troubleshooting
+- [Architecture](docs/architecture.md) — owned resources, reconciler design, trade-offs
+- [Examples index](examples/README.md) — ready-to-apply scenarios
+
 ## CRD
 
 A single namespaced CRD: `PowerDNSServer` (group `dns.aetherplatform.cloud`,

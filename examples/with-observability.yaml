@@ -1,0 +1,24 @@
+# Managed-Postgres deployment + Prometheus PodMonitor scraping PowerDNS's
+# /metrics endpoint. Requires the prometheus-operator (kube-prometheus-stack)
+# CRDs to be installed; the `release` label below must match the Prometheus
+# CR's PodMonitor selector (kube-prometheus-stack defaults to
+# `release: <Helm release name>`).
+apiVersion: dns.aetherplatform.cloud/v1alpha1
+kind: PowerDNSServer
+metadata:
+  name: obs
+  namespace: aether-system
+spec:
+  replicas: 1
+  backend:
+    type: postgres
+    postgres:
+      storageSize: 5Gi
+  dns:
+    exposure: none
+  observability:
+    podMonitor:
+      enabled: true
+      interval: 30s
+      labels:
+        release: kube-prometheus-stack
