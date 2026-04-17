@@ -1,0 +1,37 @@
+# Single PowerDNS deployment fronted by three Gateway API Gateways. The
+# operator creates one TCPRoute and one UDPRoute, each attached to all
+# three Gateways via parentRefs. Each Gateway picks its own listener via
+# tcpSectionName / udpSectionName.
+#
+# Pre-reqs:
+#   - Three Gateway resources already exist (aether-edge-{1,2,3} in
+#     gateway-system) with TCP+UDP listeners on port 53.
+#   - A Gateway controller that supports TCPRoute and UDPRoute (e.g.
+#     Cilium Gateway, Envoy Gateway, Istio with the alpha API enabled).
+apiVersion: dns.aetherplatform.cloud/v1alpha1
+kind: PowerDNSServer
+metadata:
+  name: multi-gw
+  namespace: aether-system
+spec:
+  replicas: 2
+  backend:
+    type: postgres
+    postgres:
+      storageSize: 5Gi
+  dns:
+    exposure: gateway
+    gateway:
+      parentRefs:
+        - name: aether-edge-1
+          namespace: gateway-system
+          tcpSectionName: dns-tcp
+          udpSectionName: dns-udp
+        - name: aether-edge-2
+          namespace: gateway-system
+          tcpSectionName: dns-tcp
+          udpSectionName: dns-udp
+        - name: aether-edge-3
+          namespace: gateway-system
+          tcpSectionName: dns-tcp
+          udpSectionName: dns-udp

@@ -99,7 +99,22 @@ matches the running PowerDNS version.
 - `none` — ClusterIP only
 - `loadBalancer` — Service `type=LoadBalancer`, `ExternalTrafficPolicy=Local`
   by default so PowerDNS sees real client source IPs (important for ACL/logging)
-- `gateway` — Gateway API `TCPRoute` + `UDPRoute` referencing a user-supplied Gateway
+- `gateway` — Gateway API `TCPRoute` + `UDPRoute` attached to one or more
+  user-supplied Gateways via `parentRefs[]`. Each parent may pick its own
+  TCP/UDP listener via `tcpSectionName` / `udpSectionName`.
+
+For "one Deployment, multiple public IPs" use either:
+- `spec.dns.loadBalancer.additionalServices[]` — extra LB Services
+  targeting the same pod selector. Each can have its own IP / pool /
+  annotations / `externalTrafficPolicy`. Removed entries are GC'd by
+  label selector (`dns.aetherplatform.cloud/role=additional-dns`).
+- For homogeneous "N IPs from one MetalLB pool", prefer
+  `metallb.io/loadBalancerIPs: "ip1,ip2,…"` on the primary Service —
+  no extra Services needed.
+
+For "one Deployment, multiple Gateways" use `gateway.parentRefs[]` —
+TCPRoute and UDPRoute support multi-parent natively, so still only one
+route resource per protocol.
 
 The HTTP API stays on ClusterIP. **Don't** expose it externally by default —
 it's an admin surface, and a leaked key gives full zone control.

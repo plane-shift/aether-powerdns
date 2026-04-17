@@ -121,18 +121,38 @@ spec:
                           type: string
                           enum: [Cluster, Local]
                           default: Local
+                        additionalServices:
+                          type: array
+                          items:
+                            type: object
+                            required: [nameSuffix]
+                            properties:
+                              nameSuffix:
+                                type: string
+                                pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+                              ip: { type: string }
+                              annotations:
+                                type: object
+                                additionalProperties: { type: string }
+                              externalTrafficPolicy:
+                                type: string
+                                enum: [Cluster, Local]
+                                default: Local
                     gateway:
                       type: object
-                      required: [parentRef]
+                      required: [parentRefs]
                       properties:
-                        parentRef:
-                          type: object
-                          required: [name]
-                          properties:
-                            name: { type: string }
-                            namespace: { type: string }
-                        tcpSectionName: { type: string }
-                        udpSectionName: { type: string }
+                        parentRefs:
+                          type: array
+                          minItems: 1
+                          items:
+                            type: object
+                            required: [name]
+                            properties:
+                              name: { type: string }
+                              namespace: { type: string }
+                              tcpSectionName: { type: string }
+                              udpSectionName: { type: string }
                 api:
                   type: object
                   properties:

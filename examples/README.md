@@ -10,5 +10,7 @@ Each file is a self-contained `kubectl apply -f`-able manifest.
 | `with-observability.yaml` | Same as managed-postgres + Prometheus `PodMonitor`. |
 | `with-network-policy.yaml` | NetworkPolicy enabled + extra namespace allowlisted for the API. |
 | `scheduling.yaml` | Pin pods to a dedicated DNS node pool with nodeSelector + tolerations. |
+| `multi-ip-loadbalancer.yaml` | One Deployment, three public IPs — `additionalServices` for per-IP pools / annotations. |
+| `multi-gateway.yaml` | One Deployment fronted by three Gateway API Gateways via TCP/UDPRoute parentRefs. |
 
 Pre-reqs vary per example — see comments at the top of each file.

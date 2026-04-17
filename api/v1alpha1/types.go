@@ -280,39 +280,71 @@ type DNSSpec struct {
 
 // DNSLoadBalancerSpec configures Service type=LoadBalancer for DNS.
 type DNSLoadBalancerSpec struct {
-	// IP requested from the LB controller (e.g. MetalLB). Optional.
+	// IP requested from the LB controller for the primary Service
+	// (e.g. MetalLB). Optional.
 	// +optional
 	IP string `json:"ip,omitempty"`
 
-	// Annotations applied to the Service (e.g. `metallb.io/address-pool`).
+	// Annotations applied to the primary Service (e.g.
+	// `metallb.io/address-pool`).
 	// +optional
 	Annotations map[string]string `json:"annotations,omitempty"`
 
-	// ExternalTrafficPolicy. Defaults to `Local` so PowerDNS sees the real
-	// client source IP.
+	// ExternalTrafficPolicy for the primary Service. Defaults to `Local`
+	// so PowerDNS sees the real client source IP.
+	// +kubebuilder:validation:Enum=Cluster;Local
+	// +kubebuilder:default=Local
+	// +optional
+	ExternalTrafficPolicy corev1.ServiceExternalTrafficPolicy `json:"externalTrafficPolicy,omitempty"`
+
+	// AdditionalServices renders extra LoadBalancer Services targeting the
+	// same pods, each with its own IP / pool / annotations. Use this when
+	// you need IPs from heterogeneous LB sources (e.g. one MetalLB pool +
+	// one cloud LB) or different `externalTrafficPolicy` per IP. For a
+	// single Service with multiple IPs from the same LB controller (e.g.
+	// MetalLB's `metallb.io/loadBalancerIPs`), prefer the primary
+	// `annotations` field.
+	// +optional
+	AdditionalServices []AdditionalLoadBalancerService `json:"additionalServices,omitempty"`
+}
+
+// AdditionalLoadBalancerService describes one extra LB Service alongside
+// the primary `<server>-dns` Service.
+type AdditionalLoadBalancerService struct {
+	// NameSuffix is appended to `<server>-dns` to form the Service name
+	// (e.g. `-2` → `<server>-dns-2`). Must be RFC 1123 compatible and
+	// unique within the PowerDNSServer.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
+	NameSuffix string `json:"nameSuffix"`
+
+	// IP requested from the LB controller for this Service.
+	// +optional
+	IP string `json:"ip,omitempty"`
+
+	// Annotations applied to this Service.
+	// +optional
+	Annotations map[string]string `json:"annotations,omitempty"`
+
+	// ExternalTrafficPolicy for this Service. Defaults to `Local`.
 	// +kubebuilder:validation:Enum=Cluster;Local
 	// +kubebuilder:default=Local
 	// +optional
 	ExternalTrafficPolicy corev1.ServiceExternalTrafficPolicy `json:"externalTrafficPolicy,omitempty"`
 }
 
-// DNSGatewaySpec routes DNS traffic via a Gateway API Gateway.
+// DNSGatewaySpec routes DNS traffic via one or more Gateway API Gateways.
+// All listed Gateways are attached as parentRefs on the same TCPRoute /
+// UDPRoute pair, so the operator only manages a single route per protocol
+// regardless of how many Gateways front it.
 type DNSGatewaySpec struct {
-	// ParentRef identifies the Gateway. Must already exist.
-	// +kubebuilder:validation:Required
-	ParentRef GatewayParentRef `json:"parentRef"`
-
-	// TCPSectionName picks a Gateway TCP listener. Optional — when unset,
-	// the route attaches to the Gateway as a whole.
-	// +optional
-	TCPSectionName string `json:"tcpSectionName,omitempty"`
-
-	// UDPSectionName picks a Gateway UDP listener.
-	// +optional
-	UDPSectionName string `json:"udpSectionName,omitempty"`
+	// ParentRefs lists the Gateways to attach to. At least one required.
+	// +kubebuilder:validation:MinItems=1
+	ParentRefs []GatewayParentRef `json:"parentRefs"`
 }
 
-// GatewayParentRef is a minimal subset of gateway.networking.k8s.io ParentReference.
+// GatewayParentRef is a minimal subset of gateway.networking.k8s.io
+// ParentReference, with optional per-parent listener section names.
 type GatewayParentRef struct {
 	// Name of the Gateway.
 	// +kubebuilder:validation:Required
@@ -321,6 +353,15 @@ type GatewayParentRef struct {
 	// Namespace of the Gateway. Defaults to the PowerDNSServer's namespace.
 	// +optional
 	Namespace string `json:"namespace,omitempty"`
+
+	// TCPSectionName picks a TCP listener on this Gateway. Optional —
+	// when unset, the route attaches to the Gateway as a whole.
+	// +optional
+	TCPSectionName string `json:"tcpSectionName,omitempty"`
+
+	// UDPSectionName picks a UDP listener on this Gateway.
+	// +optional
+	UDPSectionName string `json:"udpSectionName,omitempty"`
 }
 
 // APISpec configures the PowerDNS HTTP API.

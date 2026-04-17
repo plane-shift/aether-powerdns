@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"reflect"
+	"strings"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -142,8 +143,28 @@ func validateSpec(s *dnsv1alpha1.PowerDNSServer) string {
 			return "backend.postgres.byo.credentialsSecretRef.name is required"
 		}
 	}
-	if s.Spec.DNS.Exposure == dnsv1alpha1.DNSExposureGateway && s.Spec.DNS.Gateway == nil {
-		return "dns.exposure=gateway requires dns.gateway"
+	if s.Spec.DNS.Exposure == dnsv1alpha1.DNSExposureGateway {
+		if s.Spec.DNS.Gateway == nil || len(s.Spec.DNS.Gateway.ParentRefs) == 0 {
+			return "dns.exposure=gateway requires dns.gateway.parentRefs (at least one)"
+		}
+		for i, p := range s.Spec.DNS.Gateway.ParentRefs {
+			if p.Name == "" {
+				return fmt.Sprintf("dns.gateway.parentRefs[%d].name is required", i)
+			}
+		}
+	}
+	if s.Spec.DNS.Exposure == dnsv1alpha1.DNSExposureLoadBalancer &&
+		s.Spec.DNS.LoadBalancer != nil {
+		seen := map[string]struct{}{}
+		for i, e := range s.Spec.DNS.LoadBalancer.AdditionalServices {
+			if e.NameSuffix == "" {
+				return fmt.Sprintf("dns.loadBalancer.additionalServices[%d].nameSuffix is required", i)
+			}
+			if _, dup := seen[e.NameSuffix]; dup {
+				return fmt.Sprintf("dns.loadBalancer.additionalServices[%d].nameSuffix %q is duplicated", i, e.NameSuffix)
+			}
+			seen[e.NameSuffix] = struct{}{}
+		}
 	}
 	return ""
 }
@@ -264,6 +285,9 @@ func (r *PowerDNSServerReconciler) ensureWorkload(ctx context.Context, s *dnsv1a
 	if err := r.ensureOwned(ctx, s, manifests.DNSService(s)); err != nil {
 		return fmt.Errorf("ensure dns service: %w", err)
 	}
+	if err := r.reconcileAdditionalDNSServices(ctx, s); err != nil {
+		return fmt.Errorf("reconcile additional dns services: %w", err)
+	}
 	if pdb := manifests.PodDisruptionBudget(s); pdb != nil {
 		if err := r.ensureOwned(ctx, s, pdb); err != nil {
 			return fmt.Errorf("ensure pdb: %w", err)
@@ -283,6 +307,49 @@ func (r *PowerDNSServerReconciler) ensureWorkload(ctx context.Context, s *dnsv1a
 	}
 	if err := r.reconcileNetworkPolicy(ctx, s); err != nil {
 		return fmt.Errorf("reconcile network policy: %w", err)
+	}
+	return nil
+}
+
+// reconcileAdditionalDNSServices creates or updates each Service declared
+// under spec.dns.loadBalancer.additionalServices, then garbage-collects
+// any Service we previously created that's no longer desired (suffix
+// removed from the spec). Selection is by the `additional-dns` role label
+// so the primary DNS Service is never touched here.
+func (r *PowerDNSServerReconciler) reconcileAdditionalDNSServices(ctx context.Context, s *dnsv1alpha1.PowerDNSServer) error {
+	desired := manifests.AdditionalDNSServices(s)
+	desiredNames := make(map[string]struct{}, len(desired))
+	for _, svc := range desired {
+		// Tag so we can find them again for GC; merge instead of overwrite.
+		if svc.Labels == nil {
+			svc.Labels = map[string]string{}
+		}
+		svc.Labels["dns.aetherplatform.cloud/role"] = "additional-dns"
+		if err := r.ensureOwned(ctx, s, svc); err != nil {
+			return err
+		}
+		desiredNames[svc.Name] = struct{}{}
+	}
+
+	existing := &corev1.ServiceList{}
+	if err := r.List(ctx, existing,
+		client.InNamespace(s.Namespace),
+		client.MatchingLabels{
+			"app.kubernetes.io/managed-by":   "aether-powerdns",
+			"app.kubernetes.io/instance":     s.Name,
+			"dns.aetherplatform.cloud/role":  "additional-dns",
+		},
+	); err != nil {
+		return err
+	}
+	for i := range existing.Items {
+		svc := &existing.Items[i]
+		if _, keep := desiredNames[svc.Name]; keep {
+			continue
+		}
+		if err := r.Delete(ctx, svc); err != nil && !apierrors.IsNotFound(err) {
+			return err
+		}
 	}
 	return nil
 }
@@ -390,8 +457,8 @@ func (r *PowerDNSServerReconciler) phaseExposingDNS(ctx context.Context, s *dnsv
 		s.Status.DNSEndpoint = fmt.Sprintf("%s:53", ip)
 
 	case dnsv1alpha1.DNSExposureGateway:
-		if s.Spec.DNS.Gateway == nil {
-			return r.setFailed(ctx, s, "dns.exposure=gateway requires dns.gateway")
+		if s.Spec.DNS.Gateway == nil || len(s.Spec.DNS.Gateway.ParentRefs) == 0 {
+			return r.setFailed(ctx, s, "dns.exposure=gateway requires dns.gateway.parentRefs")
 		}
 		tcp := manifests.TCPRoute(s)
 		if err := r.ensureOwned(ctx, s, tcp); err != nil {
@@ -401,8 +468,15 @@ func (r *PowerDNSServerReconciler) phaseExposingDNS(ctx context.Context, s *dnsv
 		if err := r.ensureOwned(ctx, s, udp); err != nil {
 			return ctrl.Result{}, fmt.Errorf("ensure udproute: %w", err)
 		}
-		s.Status.DNSEndpoint = fmt.Sprintf("gateway:%s/%s",
-			s.Spec.DNS.Gateway.ParentRef.Namespace, s.Spec.DNS.Gateway.ParentRef.Name)
+		parents := make([]string, 0, len(s.Spec.DNS.Gateway.ParentRefs))
+		for _, p := range s.Spec.DNS.Gateway.ParentRefs {
+			ns := p.Namespace
+			if ns == "" {
+				ns = s.Namespace
+			}
+			parents = append(parents, fmt.Sprintf("%s/%s", ns, p.Name))
+		}
+		s.Status.DNSEndpoint = "gateway:" + strings.Join(parents, ",")
 	}
 
 	return r.setPhase(ctx, s, dnsv1alpha1.PhaseReady)
@@ -440,6 +514,9 @@ func (r *PowerDNSServerReconciler) reconcileDrift(ctx context.Context, s *dnsv1a
 		return err
 	}
 	if err := r.updateService(ctx, manifests.DNSService(s)); err != nil {
+		return err
+	}
+	if err := r.reconcileAdditionalDNSServices(ctx, s); err != nil {
 		return err
 	}
 	if pdb := manifests.PodDisruptionBudget(s); pdb != nil {

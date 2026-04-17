@@ -224,7 +224,7 @@ func (in *DNSSpec) DeepCopyInto(out *DNSSpec) {
 	}
 	if in.Gateway != nil {
 		out.Gateway = new(DNSGatewaySpec)
-		*out.Gateway = *in.Gateway
+		in.Gateway.DeepCopyInto(out.Gateway)
 	}
 }
 
@@ -246,6 +246,13 @@ func (in *DNSLoadBalancerSpec) DeepCopyInto(out *DNSLoadBalancerSpec) {
 		}
 		out.Annotations = m
 	}
+	if in.AdditionalServices != nil {
+		l := make([]AdditionalLoadBalancerService, len(in.AdditionalServices))
+		for i := range in.AdditionalServices {
+			in.AdditionalServices[i].DeepCopyInto(&l[i])
+		}
+		out.AdditionalServices = l
+	}
 }
 
 func (in *DNSLoadBalancerSpec) DeepCopy() *DNSLoadBalancerSpec {
@@ -257,7 +264,34 @@ func (in *DNSLoadBalancerSpec) DeepCopy() *DNSLoadBalancerSpec {
 	return out
 }
 
-func (in *DNSGatewaySpec) DeepCopyInto(out *DNSGatewaySpec) { *out = *in }
+func (in *AdditionalLoadBalancerService) DeepCopyInto(out *AdditionalLoadBalancerService) {
+	*out = *in
+	if in.Annotations != nil {
+		m := make(map[string]string, len(in.Annotations))
+		for k, v := range in.Annotations {
+			m[k] = v
+		}
+		out.Annotations = m
+	}
+}
+
+func (in *AdditionalLoadBalancerService) DeepCopy() *AdditionalLoadBalancerService {
+	if in == nil {
+		return nil
+	}
+	out := new(AdditionalLoadBalancerService)
+	in.DeepCopyInto(out)
+	return out
+}
+
+func (in *DNSGatewaySpec) DeepCopyInto(out *DNSGatewaySpec) {
+	*out = *in
+	if in.ParentRefs != nil {
+		l := make([]GatewayParentRef, len(in.ParentRefs))
+		copy(l, in.ParentRefs)
+		out.ParentRefs = l
+	}
+}
 
 func (in *DNSGatewaySpec) DeepCopy() *DNSGatewaySpec {
 	if in == nil {

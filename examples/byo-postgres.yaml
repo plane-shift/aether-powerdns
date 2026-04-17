@@ -29,8 +29,8 @@ spec:
   dns:
     exposure: gateway
     gateway:
-      parentRef:
-        name: aether-edge
-        namespace: gateway-system
-      tcpSectionName: dns-tcp
-      udpSectionName: dns-udp
+      parentRefs:
+        - name: aether-edge
+          namespace: gateway-system
+          tcpSectionName: dns-tcp
+          udpSectionName: dns-udp

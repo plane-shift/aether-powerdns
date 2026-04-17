@@ -1,0 +1,36 @@
+# Single PowerDNS deployment, three public IPs — all served by the same
+# pods. Use the spec.dns.loadBalancer.additionalServices list when each IP
+# needs its own pool / annotations / externalTrafficPolicy. For a simpler
+# "N IPs from the same MetalLB pool" case, prefer the
+# `metallb.io/loadBalancerIPs: "ip1,ip2,ip3"` annotation on the primary
+# Service instead — no extra Services needed.
+apiVersion: dns.aetherplatform.cloud/v1alpha1
+kind: PowerDNSServer
+metadata:
+  name: multi-ip
+  namespace: aether-system
+spec:
+  replicas: 3                # at least one pod per IP for ETP=Local to be useful
+  backend:
+    type: postgres
+    postgres:
+      instances: 1
+      storageSize: 5Gi
+  dns:
+    exposure: loadBalancer
+    loadBalancer:
+      ip: 203.0.113.1                   # primary -> ns1.example.com
+      annotations:
+        metallb.io/address-pool: aether-public
+      externalTrafficPolicy: Local
+      additionalServices:
+        - nameSuffix: "-2"              # -> Service `multi-ip-dns-2`, ns2.example.com
+          ip: 203.0.113.2
+          annotations:
+            metallb.io/address-pool: aether-public
+          externalTrafficPolicy: Local
+        - nameSuffix: "-3"              # -> Service `multi-ip-dns-3`, ns3.example.com
+          ip: 203.0.113.3
+          annotations:
+            metallb.io/address-pool: aether-public-secondary
+          externalTrafficPolicy: Local

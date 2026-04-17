@@ -433,7 +433,7 @@ func APIService(s *dnsv1alpha1.PowerDNSServer) *corev1.Service {
 	}
 }
 
-// DNSService renders the DNS-port Service. Type/IP/annotations follow
+// DNSService renders the primary DNS Service. Type/IP/annotations follow
 // spec.dns.exposure: ClusterIP for `none`/`gateway`, LoadBalancer for
 // `loadBalancer`.
 func DNSService(s *dnsv1alpha1.PowerDNSServer) *corev1.Service {
@@ -443,9 +443,53 @@ func DNSService(s *dnsv1alpha1.PowerDNSServer) *corev1.Service {
 		exposure = dnsv1alpha1.DNSExposureNone
 	}
 
-	svc := &corev1.Service{
+	svc := baseDNSService(s, names.DNSService)
+
+	if exposure == dnsv1alpha1.DNSExposureLoadBalancer {
+		svc.Spec.Type = corev1.ServiceTypeLoadBalancer
+		applyLBPrimary(svc, s.Spec.DNS.LoadBalancer)
+	}
+	return svc
+}
+
+// AdditionalDNSServices renders the extra LoadBalancer Services declared
+// under spec.dns.loadBalancer.additionalServices. Empty slice when not
+// in `loadBalancer` exposure mode or when no additionals are configured.
+// Each Service points at the same pod selector as the primary.
+func AdditionalDNSServices(s *dnsv1alpha1.PowerDNSServer) []*corev1.Service {
+	if s.Spec.DNS.Exposure != dnsv1alpha1.DNSExposureLoadBalancer ||
+		s.Spec.DNS.LoadBalancer == nil ||
+		len(s.Spec.DNS.LoadBalancer.AdditionalServices) == 0 {
+		return nil
+	}
+	names := NameSet(s)
+	out := make([]*corev1.Service, 0, len(s.Spec.DNS.LoadBalancer.AdditionalServices))
+	for _, extra := range s.Spec.DNS.LoadBalancer.AdditionalServices {
+		svc := baseDNSService(s, names.DNSService+extra.NameSuffix)
+		svc.Spec.Type = corev1.ServiceTypeLoadBalancer
+		if extra.IP != "" {
+			svc.Spec.LoadBalancerIP = extra.IP
+		}
+		if len(extra.Annotations) > 0 {
+			svc.Annotations = map[string]string{}
+			for k, v := range extra.Annotations {
+				svc.Annotations[k] = v
+			}
+		}
+		if extra.ExternalTrafficPolicy != "" {
+			svc.Spec.ExternalTrafficPolicy = extra.ExternalTrafficPolicy
+		} else {
+			svc.Spec.ExternalTrafficPolicy = corev1.ServiceExternalTrafficPolicyLocal
+		}
+		out = append(out, svc)
+	}
+	return out
+}
+
+func baseDNSService(s *dnsv1alpha1.PowerDNSServer, name string) *corev1.Service {
+	return &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      names.DNSService,
+			Name:      name,
 			Namespace: s.Namespace,
 			Labels:    labels(s),
 		},
@@ -458,31 +502,27 @@ func DNSService(s *dnsv1alpha1.PowerDNSServer) *corev1.Service {
 			},
 		},
 	}
+}
 
-	if exposure == dnsv1alpha1.DNSExposureLoadBalancer {
-		svc.Spec.Type = corev1.ServiceTypeLoadBalancer
-		lb := s.Spec.DNS.LoadBalancer
-		if lb != nil {
-			if lb.IP != "" {
-				svc.Spec.LoadBalancerIP = lb.IP
-			}
-			if len(lb.Annotations) > 0 {
-				svc.Annotations = map[string]string{}
-				for k, v := range lb.Annotations {
-					svc.Annotations[k] = v
-				}
-			}
-			if lb.ExternalTrafficPolicy != "" {
-				svc.Spec.ExternalTrafficPolicy = lb.ExternalTrafficPolicy
-			} else {
-				svc.Spec.ExternalTrafficPolicy = corev1.ServiceExternalTrafficPolicyLocal
-			}
-		} else {
-			svc.Spec.ExternalTrafficPolicy = corev1.ServiceExternalTrafficPolicyLocal
+func applyLBPrimary(svc *corev1.Service, lb *dnsv1alpha1.DNSLoadBalancerSpec) {
+	if lb == nil {
+		svc.Spec.ExternalTrafficPolicy = corev1.ServiceExternalTrafficPolicyLocal
+		return
+	}
+	if lb.IP != "" {
+		svc.Spec.LoadBalancerIP = lb.IP
+	}
+	if len(lb.Annotations) > 0 {
+		svc.Annotations = map[string]string{}
+		for k, v := range lb.Annotations {
+			svc.Annotations[k] = v
 		}
 	}
-
-	return svc
+	if lb.ExternalTrafficPolicy != "" {
+		svc.Spec.ExternalTrafficPolicy = lb.ExternalTrafficPolicy
+	} else {
+		svc.Spec.ExternalTrafficPolicy = corev1.ServiceExternalTrafficPolicyLocal
+	}
 }
 
 func apiSpecOrDefault(s *dnsv1alpha1.PowerDNSServer) dnsv1alpha1.APISpec {

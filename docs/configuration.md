@@ -61,17 +61,31 @@ dns:
     annotations:
       metallb.io/address-pool: aether-public
     externalTrafficPolicy: Local    # or Cluster
+    additionalServices:             # extra LB Services targeting the same pods
+      - nameSuffix: "-2"            # -> Service `<server>-dns-2`
+        ip: 10.1.0.242
+        annotations: { metallb.io/address-pool: aether-public }
+      - nameSuffix: "-3"
+        ip: 10.1.0.243
 ```
+
+For "N IPs from one pool with no per-IP customisation" prefer the
+MetalLB-native `metallb.io/loadBalancerIPs: "ip1,ip2,ip3"` annotation on
+the primary Service — no `additionalServices` needed.
 
 ```yaml
 dns:
   exposure: gateway
   gateway:
-    parentRef:
-      name: aether-edge
-      namespace: gateway-system
-    tcpSectionName: dns-tcp         # listener name on the Gateway, optional
-    udpSectionName: dns-udp
+    parentRefs:                     # one or more Gateways; same TCP/UDPRoute attaches to all
+      - name: aether-edge-1
+        namespace: gateway-system
+        tcpSectionName: dns-tcp     # listener on this Gateway, optional
+        udpSectionName: dns-udp
+      - name: aether-edge-2
+        namespace: gateway-system
+        tcpSectionName: dns-tcp
+        udpSectionName: dns-udp
 ```
 
 ## `api`
