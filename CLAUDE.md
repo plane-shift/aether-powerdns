@@ -3,6 +3,7 @@
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Development Workflow
+
 Always use Superpowers skills for this project. Begin every task by invoking
 /using-superpowers before doing anything else.
 
