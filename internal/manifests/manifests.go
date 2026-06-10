@@ -31,9 +31,11 @@ const (
 	// pgClientImage is used by the schema-init Job to apply the PowerDNS
 	// schema bundled with the pdns-auth image to the backend Postgres.
 	pgClientImage = "postgres:16-alpine"
-	// pdnsSchemaPath is where the gpgsql schema lives inside the official
-	// powerdns/pdns-auth image.
-	pdnsSchemaPath = "/usr/share/doc/pdns/schema.pgsql.sql"
+	// pdnsSchemaPath is where the gpgsql schema lives inside current
+	// powerdns/pdns-auth images (pdns-auth-51+). Older images shipped it
+	// under /usr/share — the schema-init container falls back to that.
+	pdnsSchemaPath         = "/usr/local/share/doc/pdns/schema.pgsql.sql"
+	pdnsSchemaPathFallback = "/usr/share/doc/pdns/schema.pgsql.sql"
 )
 
 // ConfigHashAnnotation forces a Deployment rollout when the rendered
@@ -106,9 +108,10 @@ func labels(s *dnsv1alpha1.PowerDNSServer) map[string]string {
 	}
 }
 
-// PDNSConfig renders the pdns.conf file. Database fields are read from the
-// backend Secret via env vars (PDNS_AUTH_API_KEY, PDNS_GPGSQL_*) so a key
-// rotation only requires a Secret update + pod restart.
+// PDNSConfig renders the pdns.conf file. The API key and database settings
+// are NOT in this file — they're Secret-sourced env vars passed to
+// pdns_server as --api-key/--gpgsql-* flags via $(VAR) arg expansion, so a
+// key rotation only requires a Secret update + pod restart.
 func PDNSConfig(s *dnsv1alpha1.PowerDNSServer) string {
 	api := apiSpecOrDefault(s)
 	return fmt.Sprintf(`# managed by aether-powerdns
@@ -121,7 +124,8 @@ webserver-port=%d
 webserver-allow-from=0.0.0.0/0,::/0
 api=yes
 # api-key, gpgsql-host, gpgsql-port, gpgsql-dbname, gpgsql-user, gpgsql-password
-# come from the env (PDNS_AUTH_API_KEY, PDNS_GPGSQL_HOST, ...).
+# are passed on the command line (--api-key=$(PDNS_AUTH_API_KEY), ...) —
+# Secret-sourced env expanded by the kubelet, never written to this file.
 loglevel=4
 `, dnsTCPPort, api.Port)
 }
@@ -174,7 +178,8 @@ func SchemaInitJob(s *dnsv1alpha1.PowerDNSServer) *batchv1.Job {
 							Image:   image,
 							Command: []string{"/bin/sh", "-c"},
 							Args: []string{fmt.Sprintf(
-								"cp %s /schema/schema.sql", pdnsSchemaPath,
+								"cp %s /schema/schema.sql 2>/dev/null || cp %s /schema/schema.sql",
+								pdnsSchemaPath, pdnsSchemaPathFallback,
 							)},
 							VolumeMounts: []corev1.VolumeMount{
 								{Name: "schema", MountPath: "/schema"},
@@ -254,18 +259,21 @@ func Deployment(s *dnsv1alpha1.PowerDNSServer, configHash string) *appsv1.Deploy
 		}},
 	)
 
-	// pdns reads gpgsql-* from the env when those keys are set in pdns.conf;
-	// here we expose the same data under both PG* (for the schema Job) and
-	// PDNS_GPGSQL_* names so pdns picks them up automatically.
-	gpgsqlMappings := map[string]string{
-		"PDNS_GPGSQL_HOST":     "PGHOST",
-		"PDNS_GPGSQL_PORT":     "PGPORT",
-		"PDNS_GPGSQL_DBNAME":   "PGDATABASE",
-		"PDNS_GPGSQL_USER":     "PGUSER",
-		"PDNS_GPGSQL_PASSWORD": "PGPASSWORD",
+	// Expose the backend credentials under PDNS_GPGSQL_* names (aliases of
+	// the PG* vars above via $(VAR) dependent-env expansion — PG* must come
+	// earlier in the env list). pdns_server does NOT read these from the
+	// env itself; they reach it via --gpgsql-* $(VAR) arg expansion below.
+	// Fixed slice, NOT a map: map iteration order is random and would
+	// change the pod-template hash every reconcile (endless rollouts).
+	gpgsqlMappings := []struct{ pdnsVar, pgVar string }{
+		{"PDNS_GPGSQL_HOST", "PGHOST"},
+		{"PDNS_GPGSQL_PORT", "PGPORT"},
+		{"PDNS_GPGSQL_DBNAME", "PGDATABASE"},
+		{"PDNS_GPGSQL_USER", "PGUSER"},
+		{"PDNS_GPGSQL_PASSWORD", "PGPASSWORD"},
 	}
-	for k, v := range gpgsqlMappings {
-		env = append(env, corev1.EnvVar{Name: k, Value: "$(" + v + ")"})
+	for _, m := range gpgsqlMappings {
+		env = append(env, corev1.EnvVar{Name: m.pdnsVar, Value: "$(" + m.pgVar + ")"})
 	}
 
 	podAnnotations := map[string]string{}
@@ -279,7 +287,21 @@ func Deployment(s *dnsv1alpha1.PowerDNSServer, configHash string) *appsv1.Deploy
 				Name:    "pdns-auth",
 				Image:   image,
 				Command: []string{"pdns_server"},
-				Args:    []string{"--config-dir=/etc/powerdns", "--socket-dir=/var/run"},
+				// pdns_server is exec'd directly (the image's startup
+				// wrapper that translates PDNS_AUTH_* env into config is
+				// bypassed), so the API key and gpgsql settings must be
+				// passed as flags. $(VAR) is expanded by the kubelet from
+				// the container env — secrets never land in the ConfigMap.
+				Args: []string{
+					"--config-dir=/etc/powerdns",
+					"--socket-dir=/var/run",
+					"--api-key=$(PDNS_AUTH_API_KEY)",
+					"--gpgsql-host=$(PDNS_GPGSQL_HOST)",
+					"--gpgsql-port=$(PDNS_GPGSQL_PORT)",
+					"--gpgsql-dbname=$(PDNS_GPGSQL_DBNAME)",
+					"--gpgsql-user=$(PDNS_GPGSQL_USER)",
+					"--gpgsql-password=$(PDNS_GPGSQL_PASSWORD)",
+				},
 				Ports: []corev1.ContainerPort{
 					{Name: "dns-tcp", ContainerPort: dnsTCPPort, Protocol: corev1.ProtocolTCP},
 					{Name: "dns-udp", ContainerPort: dnsUDPPort, Protocol: corev1.ProtocolUDP},
