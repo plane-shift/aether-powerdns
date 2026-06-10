@@ -3,10 +3,12 @@
 **Status: APPROVED**
 Date: 2026-06-11
 
-Revision points explicitly offered and declined by the user (decisions stand
-as designed): RRSet name/type immutability; `deletionPolicy: Delete` default;
-`spec.nameservers` authoritative post-create; DNSSEC disable deletes keys;
-conflict rule favors the older RRSet.
+Revisions requested by the user after first review (now reflected below):
+`spec.nameservers` is **create-only seeding** (apex NS managed like any other
+record afterwards); DNSSEC disable **deactivates** keys instead of deleting
+them (re-enabling doesn't force a new DS at the registrar); rrset conflicts
+**reject both** claimants (no older-wins rule). Kept as designed: RRSet
+name/type immutability; `deletionPolicy: Delete` default.
 
 ## Decision context
 
@@ -63,14 +65,16 @@ spec:
   zoneName: example.com.        # immutable, CEL-enforced trailing dot
   kind: Native                  # Native | Primary | Secondary; default Native; mutable
   masters: []                   # CEL: required iff kind=Secondary, forbidden otherwise
-  nameservers:                  # seeds apex NS+SOA at creation; afterwards the
-    - ns1.example.com.          # apex NS rrset is operator-declared and kept in sync
+  nameservers:                  # CREATE-ONLY: seeds apex NS+SOA at zone creation;
+    - ns1.example.com.          # afterwards apex NS is an ordinary record (RRSet CR / API)
   soa:                          # optional; PowerDNS defaults apply otherwise
     hostmaster: hostmaster.example.com.
     ttl: 3600
   dnssec:
     enabled: true               # secures via /cryptokeys with PowerDNS defaults;
-                                # disabling unsecures (deletes keys)
+                                # disabling DEACTIVATES keys but keeps them, so
+                                # re-enabling reuses the same key and the DS
+                                # lodged at the registrar stays valid
   deletionPolicy: Delete        # Delete | Orphan; default Delete
 status:
   phase: Ready
@@ -82,11 +86,11 @@ status:
 ```
 
 Reconcile flow: resolve server (must exist, be `Ready`, and authorize the
-Zone's namespace) → ensure finalizer → `GET` zone, create if missing →
-correct drift on kind/masters → reconcile apex NS from `spec.nameservers` →
-ensure/remove DNSSEC keys, surface DS records in status → write serial +
+Zone's namespace) → ensure finalizer → `GET` zone, create if missing (seeding
+NS + SOA once at creation) → correct drift on kind/masters →
+ensure/deactivate DNSSEC keys, surface DS records in status → write serial +
 conditions. Periodic 5m resync corrects out-of-band drift on declared fields
-only.
+only; the apex NS rrset is NOT operator-owned after creation.
 
 ## 3. RRSet CRD
 
@@ -119,14 +123,17 @@ finalizer handles cleanup.
 Guards:
 - Target zone must be `Ready` and must not be `Secondary` (its content is
   replicated; writes are rejected).
-- Two RRSets declaring the same (zone, name, type): the newer one (by
-  creationTimestamp, UID tiebreak) goes `Ready=False` reason `Conflict`
-  rather than fighting over the rrset.
+- Two RRSets declaring the same (zone, name, type): **both** go
+  `Ready=False` reason `Conflict` and neither is applied until one is
+  deleted. Symmetric and stateless — no timestamp races, no hidden claim
+  state. When a conflicting CR is deleted, its finalizer skips the API
+  delete if a surviving claimant exists (the survivor re-applies on its
+  next pass).
 
 ## 4. Coexistence, deletion, cross-namespace
 
 - **Patch-only drift model**: the operator only ever PATCHes rrsets declared
-  in CRs (plus the apex NS when `spec.nameservers` is set). Records created
+  in CRs (plus a one-time NS/SOA seed at zone creation). Records created
   via the HTTP API or `pdnsutil` are never touched — the existing workflow
   survives per zone, even alongside CRs.
 - **Deletion**: finalizers remove the rrset (`changetype=DELETE`) / zone (API
