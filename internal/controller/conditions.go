@@ -28,3 +28,14 @@ func trueCond(s *dnsv1alpha1.PowerDNSServer, condType, reason, message string) {
 func falseCond(s *dnsv1alpha1.PowerDNSServer, condType, reason, message string) {
 	setCondition(s, condType, metav1.ConditionFalse, reason, message)
 }
+
+// setCondOn is setCondition for arbitrary condition lists (Zone, RRSet).
+func setCondOn(conds *[]metav1.Condition, gen int64, condType string, status metav1.ConditionStatus, reason, message string) {
+	meta.SetStatusCondition(conds, metav1.Condition{
+		Type:               condType,
+		Status:             status,
+		Reason:             reason,
+		Message:            message,
+		ObservedGeneration: gen,
+	})
+}
