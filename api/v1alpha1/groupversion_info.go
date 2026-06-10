@@ -19,5 +19,9 @@ var (
 )
 
 func init() {
-	SchemeBuilder.Register(&PowerDNSServer{}, &PowerDNSServerList{})
+	SchemeBuilder.Register(
+		&PowerDNSServer{}, &PowerDNSServerList{},
+		&Zone{}, &ZoneList{},
+		&RRSet{}, &RRSetList{},
+	)
 }

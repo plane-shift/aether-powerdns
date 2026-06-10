@@ -55,9 +55,9 @@ const DefaultImage = "powerdns/pdns-auth-51"
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
 // PowerDNSServer is a PowerDNS authoritative deployment with a database
-// backend. Zones and records are managed out of band via the HTTP API or
-// `pdnsutil` (e.g. `kubectl exec`); this CRD intentionally only owns the
-// server lifecycle.
+// backend. Zones and records can be managed declaratively via the Zone
+// and RRSet CRDs, or out of band via the HTTP API / `pdnsutil` — the
+// operator is patch-only and never touches undeclared records.
 type PowerDNSServer struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
@@ -123,6 +123,11 @@ type PowerDNSServerSpec struct {
 	// namespace by default. Disabled by default — enable explicitly.
 	// +optional
 	NetworkPolicy NetworkPolicySpec `json:"networkPolicy,omitempty"`
+
+	// ZoneManagement authorizes Zone/RRSet resources in OTHER namespaces
+	// to target this server. Same-namespace resources are always allowed.
+	// +optional
+	ZoneManagement ZoneManagementSpec `json:"zoneManagement,omitempty"`
 }
 
 // SchedulingSpec controls where pdns pods land.
@@ -189,6 +194,14 @@ type NetworkPolicySpec struct {
 	// `kubernetes.io/metadata.name=<name>` (the standard since K8s 1.22).
 	// +optional
 	AdditionalAllowedAPINamespaces []string `json:"additionalAllowedAPINamespaces,omitempty"`
+}
+
+// ZoneManagementSpec gates cross-namespace Zone/RRSet references.
+type ZoneManagementSpec struct {
+	// AllowedNamespaces lists namespaces whose Zone/RRSet resources may
+	// reference this server. `*` allows all namespaces.
+	// +optional
+	AllowedNamespaces []string `json:"allowedNamespaces,omitempty"`
 }
 
 // BackendSpec selects and configures the storage backend.
