@@ -6,6 +6,10 @@ import (
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
+// +kubebuilder:printcolumn:name="Record",type=string,JSONPath=`.spec.name`
+// +kubebuilder:printcolumn:name="Type",type=string,JSONPath=`.spec.type`
+// +kubebuilder:printcolumn:name="Zone",type=string,JSONPath=`.spec.zoneRef.name`
+// +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
 // RRSet declares one record set (name + type) in a Zone. One generic
 // kind covers every record type — the type is a spec field, mirroring

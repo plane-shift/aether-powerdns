@@ -399,10 +399,11 @@ func (in *ZoneList) DeepCopyInto(out *ZoneList) {
 	out.TypeMeta = in.TypeMeta
 	in.ListMeta.DeepCopyInto(&out.ListMeta)
 	if in.Items != nil {
-		out.Items = make([]Zone, len(in.Items))
+		l := make([]Zone, len(in.Items))
 		for i := range in.Items {
-			in.Items[i].DeepCopyInto(&out.Items[i])
+			in.Items[i].DeepCopyInto(&l[i])
 		}
+		out.Items = l
 	}
 }
 
@@ -518,10 +519,11 @@ func (in *RRSetList) DeepCopyInto(out *RRSetList) {
 	out.TypeMeta = in.TypeMeta
 	in.ListMeta.DeepCopyInto(&out.ListMeta)
 	if in.Items != nil {
-		out.Items = make([]RRSet, len(in.Items))
+		l := make([]RRSet, len(in.Items))
 		for i := range in.Items {
-			in.Items[i].DeepCopyInto(&out.Items[i])
+			in.Items[i].DeepCopyInto(&l[i])
 		}
+		out.Items = l
 	}
 }
 

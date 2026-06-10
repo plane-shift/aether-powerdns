@@ -47,6 +47,12 @@ type ObjectRef struct {
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
+// +kubebuilder:resource:shortName=pdnszone
+// +kubebuilder:printcolumn:name="Zone",type=string,JSONPath=`.spec.zoneName`
+// +kubebuilder:printcolumn:name="Kind",type=string,JSONPath=`.spec.kind`
+// +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
+// +kubebuilder:printcolumn:name="Serial",type=integer,JSONPath=`.status.serial`
+// +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
 // Zone declares one DNS zone on a PowerDNSServer. The operator owns the
 // zone's existence and metadata (kind, masters, DNSSEC) but is
