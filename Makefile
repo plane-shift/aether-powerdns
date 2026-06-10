@@ -35,4 +35,4 @@ undeploy:
 	kubectl delete -k config/ --ignore-not-found
 
 crd:
-	kubectl apply -f config/crd/dns.aetherplatform.cloud_powerdnsservers.yaml
+	kubectl apply -f config/crd/

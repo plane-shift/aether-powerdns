@@ -1,0 +1,121 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: zones.dns.aetherplatform.cloud
+spec:
+  group: dns.aetherplatform.cloud
+  names:
+    kind: Zone
+    listKind: ZoneList
+    plural: zones
+    singular: zone
+    shortNames: [pdnszone]
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - jsonPath: .spec.zoneName
+          name: Zone
+          type: string
+        - jsonPath: .spec.kind
+          name: Kind
+          type: string
+        - jsonPath: .status.phase
+          name: Phase
+          type: string
+        - jsonPath: .status.serial
+          name: Serial
+          type: integer
+        - jsonPath: .metadata.creationTimestamp
+          name: Age
+          type: date
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            apiVersion: { type: string }
+            kind: { type: string }
+            metadata: { type: object }
+            spec:
+              type: object
+              required: [serverRef, zoneName]
+              x-kubernetes-validations:
+                - rule: "self.serverRef.name == oldSelf.serverRef.name && (has(self.serverRef.namespace) ? self.serverRef.namespace : '') == (has(oldSelf.serverRef.namespace) ? oldSelf.serverRef.namespace : '')"
+                  message: "serverRef is immutable after creation"
+                - rule: "self.zoneName == oldSelf.zoneName"
+                  message: "zoneName is immutable after creation"
+                - rule: "self.kind != 'Secondary' || (has(self.masters) && self.masters.size() > 0)"
+                  message: "masters is required for Secondary zones"
+                - rule: "self.kind == 'Secondary' || !has(self.masters) || self.masters.size() == 0"
+                  message: "masters is only allowed on Secondary zones"
+              properties:
+                serverRef:
+                  type: object
+                  required: [name]
+                  properties:
+                    name: { type: string }
+                    namespace: { type: string }
+                zoneName:
+                  type: string
+                  pattern: '^[a-z0-9_.\-]+\.$'
+                kind:
+                  type: string
+                  enum: [Native, Primary, Secondary]
+                  default: Native
+                masters:
+                  type: array
+                  items: { type: string }
+                nameservers:
+                  type: array
+                  items:
+                    type: string
+                    pattern: '\.$'
+                soa:
+                  type: object
+                  required: [hostmaster]
+                  properties:
+                    hostmaster:
+                      type: string
+                      pattern: '\.$'
+                    ttl:
+                      type: integer
+                      format: int32
+                      minimum: 1
+                      default: 3600
+                dnssec:
+                  type: object
+                  properties:
+                    enabled:
+                      type: boolean
+                      default: false
+                deletionPolicy:
+                  type: string
+                  enum: [Delete, Orphan]
+                  default: Delete
+            status:
+              type: object
+              properties:
+                phase: { type: string }
+                serial: { type: integer, format: int64 }
+                dsRecords:
+                  type: array
+                  items: { type: string }
+                observedGeneration: { type: integer, format: int64 }
+                failureMessage: { type: string }
+                conditions:
+                  type: array
+                  items:
+                    type: object
+                    required: [type, status]
+                    properties:
+                      type: { type: string }
+                      status: { type: string }
+                      reason: { type: string }
+                      message: { type: string }
+                      observedGeneration: { type: integer, format: int64 }
+                      lastTransitionTime: { type: string, format: date-time }
