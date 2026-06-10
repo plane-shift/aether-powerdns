@@ -5,6 +5,8 @@
 #     zoneManagement:
 #       allowedNamespaces: ["app-team"]   # or ["*"]
 #
+# Prereq: examples/zone-basic.yaml (defines the example-com Zone in aether-system).
+#
 apiVersion: dns.aetherplatform.cloud/v1alpha1
 kind: RRSet
 metadata:

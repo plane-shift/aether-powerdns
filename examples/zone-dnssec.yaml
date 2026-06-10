@@ -2,6 +2,7 @@
 # defaults; lodge status.dsRecords at your registrar. Setting
 # dnssec.enabled=false later DEACTIVATES the key but keeps it, so
 # re-enabling does not invalidate the registrar DS.
+# Prereq: a Ready PowerDNSServer named `demo` (see examples/managed-postgres.yaml).
 apiVersion: dns.aetherplatform.cloud/v1alpha1
 kind: Zone
 metadata:

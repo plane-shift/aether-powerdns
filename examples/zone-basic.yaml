@@ -1,6 +1,7 @@
 # A Native zone plus records on the `demo` server from
 # examples/managed-postgres.yaml. The operator seeds the apex NS (and SOA)
 # once at creation; afterwards the apex NS is an ordinary record.
+# ns2 glue record omitted for brevity — add one like ns1 for a servable zone.
 apiVersion: dns.aetherplatform.cloud/v1alpha1
 kind: Zone
 metadata:

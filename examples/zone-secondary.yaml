@@ -1,5 +1,6 @@
 # A Secondary zone replicating from external primaries. Record content is
 # replicated via AXFR/IXFR — RRSet resources are rejected for it.
+# Prereq: a Ready PowerDNSServer named `demo` (see examples/managed-postgres.yaml).
 apiVersion: dns.aetherplatform.cloud/v1alpha1
 kind: Zone
 metadata:

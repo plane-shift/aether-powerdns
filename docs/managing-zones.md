@@ -76,9 +76,7 @@ spec:
 | Secondary zones | Content replicates from `spec.masters`; RRSet resources targeting them are rejected. |
 | NetworkPolicy | If `spec.networkPolicy.enabled=true` and the operator runs outside the server's namespace, add the operator's namespace to `additionalAllowedAPINamespaces` — otherwise zones sit at `Ready=False reason=APIUnreachable`. |
 
-The HTTP API and `pdnsutil` workflows described below still work and coexist
-per zone — records you manage imperatively are never overwritten by the
-operator.
+The HTTP API and pdnsutil workflows below continue to work alongside the CRDs.
 
 ## HTTP API and pdnsutil
 
@@ -105,8 +103,6 @@ If you're outside the cluster, port-forward the API service:
 kubectl port-forward -n $NS svc/${SERVER}-api 8081:8081 &
 API=http://127.0.0.1:8081
 ```
-
-### HTTP API
 
 PowerDNS uses `localhost` as its server ID by default — that's the
 literal string in the URL, not your hostname.
