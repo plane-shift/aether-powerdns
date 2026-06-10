@@ -62,14 +62,16 @@ spec:
                     namespace: { type: string }
                 zoneName:
                   type: string
-                  pattern: '^[a-z0-9_.\-]+\.$'
+                  pattern: '^([a-z0-9_][a-z0-9_\-]*\.)+$'
                 kind:
                   type: string
                   enum: [Native, Primary, Secondary]
                   default: Native
                 masters:
                   type: array
-                  items: { type: string }
+                  items:
+                    type: string
+                    minLength: 1
                 nameservers:
                   type: array
                   items:
@@ -111,10 +113,10 @@ spec:
                   type: array
                   items:
                     type: object
-                    required: [type, status]
+                    required: [type, status, reason, message, lastTransitionTime]
                     properties:
                       type: { type: string }
-                      status: { type: string }
+                      status: { type: string, enum: ["True", "False", "Unknown"] }
                       reason: { type: string }
                       message: { type: string }
                       observedGeneration: { type: integer, format: int64 }
