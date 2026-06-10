@@ -127,6 +127,8 @@ func (c *Client) do(ctx context.Context, method, path string, in, out any) error
 	if out != nil {
 		return json.NewDecoder(resp.Body).Decode(out)
 	}
+	// Drain so the transport can reuse the connection.
+	_, _ = io.Copy(io.Discard, resp.Body)
 	return nil
 }
 
@@ -142,6 +144,9 @@ func (c *Client) GetZone(ctx context.Context, name string) (*Zone, error) {
 
 // CreateZone registers a new zone and returns PowerDNS's view of it.
 func (c *Client) CreateZone(ctx context.Context, z *Zone) (*Zone, error) {
+	if z.Nameservers == nil {
+		z.Nameservers = []string{} // PowerDNS 422s on "nameservers":null
+	}
 	created := &Zone{}
 	if err := c.do(ctx, http.MethodPost, "/servers/localhost/zones", z, created); err != nil {
 		return nil, err

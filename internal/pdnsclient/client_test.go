@@ -157,3 +157,37 @@ func TestTransportErrorIsUnreachable(t *testing.T) {
 		t.Fatalf("want ErrUnreachable, got %v", err)
 	}
 }
+
+func TestUpdateZone(t *testing.T) {
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPut || r.URL.Path != "/api/v1/servers/localhost/zones/example.com." {
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		if body["kind"] != "Primary" {
+			t.Errorf("kind = %v, want Primary", body["kind"])
+		}
+		if _, ok := body["masters"]; !ok {
+			t.Error("masters field missing — must be present (possibly empty) on update")
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+	if err := c.UpdateZone(context.Background(), "example.com.", ZoneUpdate{Kind: "Primary"}); err != nil {
+		t.Fatalf("UpdateZone: %v", err)
+	}
+}
+
+func TestRectifyZone(t *testing.T) {
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPut || r.URL.Path != "/api/v1/servers/localhost/zones/example.com./rectify" {
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		_, _ = w.Write([]byte(`{"result":"Rectified"}`))
+	})
+	if err := c.RectifyZone(context.Background(), "example.com."); err != nil {
+		t.Fatalf("RectifyZone: %v", err)
+	}
+}
