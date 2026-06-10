@@ -30,6 +30,7 @@ type fakePDNS struct {
 	rrsets    map[string]map[string]pdnsclient.RRSet   // zone -> "name|type"
 	keys      map[string][]pdnsclient.Cryptokey        // zone -> keys
 	nextKeyID int
+	failNextPatch bool // when set, the next PATCH returns 500 and clears the flag
 }
 
 func newFakePDNS(t *testing.T) *fakePDNS {
@@ -104,6 +105,11 @@ func (f *fakePDNS) handle(w http.ResponseWriter, r *http.Request) {
 		delete(f.keys, zoneName)
 		w.WriteHeader(http.StatusNoContent)
 	case len(parts) == 1 && r.Method == http.MethodPatch:
+		if f.failNextPatch {
+			f.failNextPatch = false
+			http.Error(w, `{"error":"injected failure"}`, http.StatusInternalServerError)
+			return
+		}
 		var body struct {
 			RRSets []pdnsclient.RRSet `json:"rrsets"`
 		}

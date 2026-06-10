@@ -17,6 +17,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	dnsv1alpha1 "github.com/plane-shift/aether-powerdns/api/v1alpha1"
@@ -188,7 +189,15 @@ func (r *ZoneReconciler) createZone(ctx context.Context, zone *dnsv1alpha1.Zone,
 			}},
 		}
 		if err := pc.PatchRRSets(ctx, zone.Spec.ZoneName, []pdnsclient.RRSet{soa}); err != nil {
-			return nil, fmt.Errorf("seed SOA: %w", err)
+			// Compensate: SOA seeding is create-only, so a half-created
+			// zone would silently keep the default SOA forever. Delete it
+			// so the next pass recreates and reseeds atomically-by-retry.
+			if derr := pc.DeleteZone(ctx, zone.Spec.ZoneName); derr != nil {
+				r.event(zone, corev1.EventTypeWarning, "SOASeedFailed",
+					"zone created but SOA seed and compensating delete both failed; zone keeps the PowerDNS default SOA: "+err.Error())
+				return nil, fmt.Errorf("seed SOA: %w", err)
+			}
+			return nil, fmt.Errorf("seed SOA (zone rolled back, will retry): %w", err)
 		}
 	}
 	r.event(zone, corev1.EventTypeNormal, "ZoneCreated", "registered "+zone.Spec.ZoneName+" in PowerDNS")
@@ -337,6 +346,7 @@ func (r *ZoneReconciler) zonesForServer(ctx context.Context, obj client.Object) 
 	if err := r.List(ctx, &zones, client.MatchingFields{
 		zoneServerIndex: obj.GetNamespace() + "/" + obj.GetName(),
 	}); err != nil {
+		log.FromContext(ctx).Error(err, "failed to list zones for server", "server", client.ObjectKeyFromObject(obj))
 		return nil
 	}
 	reqs := make([]reconcile.Request, 0, len(zones.Items))

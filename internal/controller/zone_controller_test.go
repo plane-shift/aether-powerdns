@@ -308,3 +308,61 @@ func TestZoneDeleteReleasesWhenServerGone(t *testing.T) {
 		t.Error("zone should be gone after finalizer release")
 	}
 }
+
+func TestZoneMastersDriftCorrected(t *testing.T) {
+	f := newFakePDNS(t)
+	f.seedZone("example.com.", "Secondary")
+	f.mu.Lock()
+	f.zones["example.com."].Masters = []string{"198.51.100.250"}
+	f.mu.Unlock()
+	server, secret := readyServer("pdns", "dns", f)
+	zone := basicZone("dns")
+	zone.Spec.Kind = dnsv1alpha1.ZoneKindSecondary
+	zone.Spec.Masters = []string{"198.51.100.1", "198.51.100.2"}
+	zone.Spec.Nameservers = nil
+	r, _ := newZoneReconciler(t, server, secret, zone)
+
+	reconcileZoneN(t, r, types.NamespacedName{Name: "example-com", Namespace: "dns"}, 3)
+
+	f.mu.Lock()
+	masters := f.zones["example.com."].Masters
+	f.mu.Unlock()
+	if len(masters) != 2 || masters[0] != "198.51.100.1" || masters[1] != "198.51.100.2" {
+		t.Errorf("masters = %v, want the spec's two primaries (drift not corrected)", masters)
+	}
+}
+
+func TestZoneSOASeedFailureRollsBackAndRetries(t *testing.T) {
+	f := newFakePDNS(t)
+	server, secret := readyServer("pdns", "dns", f)
+	zone := basicZone("dns")
+	zone.Spec.SOA = &dnsv1alpha1.SOASpec{Hostmaster: "hostmaster.example.com."}
+	r, _ := newZoneReconciler(t, server, secret, zone)
+	key := types.NamespacedName{Name: "example-com", Namespace: "dns"}
+
+	// First pass adds the finalizer; inject the failure before the pass
+	// that creates the zone, so CreateZone succeeds and the SOA PATCH 500s.
+	reconcileZoneN(t, r, key, 1)
+	f.mu.Lock()
+	f.failNextPatch = true
+	f.mu.Unlock()
+	reconcileZoneN(t, r, key, 1)
+
+	// Compensation must have rolled the half-created zone back.
+	if f.hasZone("example.com.") {
+		t.Fatal("zone should have been rolled back after SOA seed failure")
+	}
+
+	// Next pass recreates the zone WITH the SOA seed.
+	reconcileZoneN(t, r, key, 2)
+	if !f.hasZone("example.com.") {
+		t.Fatal("zone should be recreated on retry")
+	}
+	soa, ok := f.getRRSet("example.com.", "example.com.", "SOA")
+	if !ok {
+		t.Fatal("SOA should be seeded on the retry pass")
+	}
+	if soa.Records[0].Content != "ns1.example.com. hostmaster.example.com. 0 10800 3600 604800 3600" {
+		t.Errorf("unexpected SOA content: %q", soa.Records[0].Content)
+	}
+}
