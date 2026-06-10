@@ -1,7 +1,12 @@
 # Design: Zone & RRSet CRDs for aether-powerdns
 
-**Status: DRAFT — under user revision**
+**Status: APPROVED**
 Date: 2026-06-11
+
+Revision points explicitly offered and declined by the user (decisions stand
+as designed): RRSet name/type immutability; `deletionPolicy: Delete` default;
+`spec.nameservers` authoritative post-create; DNSSEC disable deletes keys;
+conflict rule favors the older RRSet.
 
 ## Decision context
 
