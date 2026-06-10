@@ -3,24 +3,27 @@
 Kubernetes operator that runs the [PowerDNS authoritative server](https://doc.powerdns.com/authoritative/)
 backed by a Postgres database, with the HTTP API protected by a generated key.
 
-The operator only manages the **server lifecycle**. Zones, records and DNSSEC
-keys are managed out of band — call the PowerDNS HTTP API with the generated
-key, or run `pdnsutil` via `kubectl exec`. This keeps the CRD surface tiny and
-lets users use every PowerDNS record type without operator changes.
+The operator manages the **server lifecycle** and provides declarative
+`Zone` and `RRSet` resources for GitOps-style DNS management. The PowerDNS
+HTTP API and `pdnsutil` still work alongside the CRDs — records you manage
+imperatively are never overwritten.
 
 ## Documentation
 
 - [Getting started](docs/getting-started.md) — install, deploy, smoke-test
 - [Configuration reference](docs/configuration.md) — every spec field
-- [Managing zones and records](docs/managing-zones.md) — HTTP API + `pdnsutil` recipes
+- [Managing zones and records](docs/managing-zones.md) — declarative Zone/RRSet CRDs, HTTP API + `pdnsutil` recipes
 - [Operations](docs/operations.md) — scaling, upgrades, key rotation, troubleshooting
 - [Architecture](docs/architecture.md) — owned resources, reconciler design, trade-offs
 - [Examples index](examples/README.md) — ready-to-apply scenarios
 
-## CRD
+## CRDs
 
-A single namespaced CRD: `PowerDNSServer` (group `dns.aetherplatform.cloud`,
-short name `pdns`).
+Three namespaced CRDs in group `dns.aetherplatform.cloud`:
+
+- `PowerDNSServer` (short name `pdns`) — server lifecycle
+- `Zone` — declarative zone management
+- `RRSet` — declarative record management (type is a spec field; covers all RFC types)
 
 ```yaml
 apiVersion: dns.aetherplatform.cloud/v1alpha1
@@ -47,6 +50,15 @@ CNPG provisioning and points the server at an existing Postgres.
 
 `spec.dns.exposure: gateway` creates `TCPRoute` + `UDPRoute` resources
 attached to a Gateway you supply via `dns.gateway.parentRef`.
+
+## Zones and records
+
+`Zone` and `RRSet` resources let you manage DNS declaratively alongside the
+rest of your Kubernetes configuration. The operator reconciles only the
+rrsets you declare (patch-only/coexist model) — everything else stays
+untouched. Secondary zones, DNSSEC, and cross-namespace record ownership
+are all supported. See [docs/managing-zones.md](docs/managing-zones.md) and
+the [zone examples](examples/zone-basic.yaml) for details.
 
 ## Image
 
@@ -90,8 +102,9 @@ make image TAG=dev
 api/v1alpha1/             CRD types + deepcopy
 cmd/operator/             manager entrypoint
 internal/cnpg/            CloudNativePG Cluster manifest (unstructured)
-internal/controller/      reconciler (phase-based state machine)
+internal/controller/      reconcilers (PowerDNSServer phase machine; Zone/RRSet convergers)
 internal/manifests/       Deployment, Services, ConfigMap, Job, TCP/UDP routes
+internal/pdnsclient/      thin PowerDNS HTTP API client
 config/                   CRD, RBAC, manager Deployment, kustomize
-examples/                 sample PowerDNSServer resources
+examples/                 sample manifests (PowerDNSServer, Zone, RRSet)
 ```

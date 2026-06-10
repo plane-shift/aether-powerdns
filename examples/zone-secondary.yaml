@@ -1,0 +1,15 @@
+# A Secondary zone replicating from external primaries. Record content is
+# replicated via AXFR/IXFR — RRSet resources are rejected for it.
+apiVersion: dns.aetherplatform.cloud/v1alpha1
+kind: Zone
+metadata:
+  name: partner-org-secondary
+  namespace: aether-system
+spec:
+  serverRef:
+    name: demo
+  zoneName: partner.org.
+  kind: Secondary
+  masters:
+    - "198.51.100.1"
+    - "198.51.100.2"
