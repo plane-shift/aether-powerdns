@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -95,6 +96,9 @@ func (r *RRSetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 			fmt.Sprintf("namespace %q is not allowed by %s/%s spec.zoneManagement.allowedNamespaces",
 				rr.Namespace, server.Namespace, server.Name), requeueLong)
 	}
+	if server.Status.Phase != dnsv1alpha1.PhaseReady {
+		return r.markNotReady(ctx, rr, "ServerNotReady", "PowerDNSServer is not Ready yet", requeueShort)
+	}
 
 	other, err := r.findConflict(ctx, rr)
 	if err != nil {
@@ -116,8 +120,17 @@ func (r *RRSetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	if err != nil {
 		return r.markNotReady(ctx, rr, "APIUnreachable", err.Error(), requeueLong)
 	}
-	if err := pc.PatchRRSets(ctx, zone.Spec.ZoneName, []pdnsclient.RRSet{desiredRRSet(rr)}); err != nil {
+	desired := desiredRRSet(rr)
+	pz, err := pc.GetZone(ctx, zone.Spec.ZoneName)
+	if err != nil {
 		return r.markNotReady(ctx, rr, apiReason(err), err.Error(), requeueLong)
+	}
+	if !rrsetMatches(pz, desired) {
+		if err := pc.PatchRRSets(ctx, zone.Spec.ZoneName, []pdnsclient.RRSet{desired}); err != nil {
+			return r.markNotReady(ctx, rr, apiReason(err), err.Error(), requeueLong)
+		}
+		r.event(rr, corev1.EventTypeNormal, "RRSetApplied",
+			fmt.Sprintf("applied %s %s (%d records)", rr.Spec.Name, rr.Spec.Type, len(rr.Spec.Records)))
 	}
 
 	rr.Status.ObservedGeneration = rr.Generation
@@ -186,11 +199,16 @@ func (r *RRSetReconciler) deleteFromPowerDNS(ctx context.Context, rr *dnsv1alpha
 	if errors.Is(derr, pdnsclient.ErrNotFound) {
 		return nil // zone already gone in PowerDNS
 	}
+	if derr == nil {
+		r.event(rr, corev1.EventTypeNormal, "RRSetDeleted", "removed "+rr.Spec.Name+" "+rr.Spec.Type+" from PowerDNS")
+	}
 	return derr
 }
 
 // findConflict returns "<ns>/<name>" of another live RRSet claiming the
-// same (zone, name, type), or "".
+// same (zone, name, type), or "". Reject-both is eventual (within one
+// resync), not admission-time: a claimant can apply before its rival appears
+// in the cache; it flips to Conflict on its next pass.
 func (r *RRSetReconciler) findConflict(ctx context.Context, rr *dnsv1alpha1.RRSet) (string, error) {
 	var list dnsv1alpha1.RRSetList
 	if err := r.List(ctx, &list, client.MatchingFields{
@@ -237,6 +255,42 @@ func desiredRRSet(rr *dnsv1alpha1.RRSet) pdnsclient.RRSet {
 		Name: rr.Spec.Name, Type: rr.Spec.Type, TTL: ttl,
 		ChangeType: "REPLACE", Records: recs,
 	}
+}
+
+// rrsetMatches reports whether the zone already serves the desired rrset
+// (same TTL, same record contents as a set). Comparing before PATCHing
+// keeps the 5m resync from bumping the zone serial — PowerDNS increments
+// it on every PATCH, which would NOTIFY secondaries forever. PowerDNS may
+// canonicalize record content; a persistent mismatch just degrades to the
+// old always-PATCH behavior, never to a missed update.
+func rrsetMatches(pz *pdnsclient.Zone, desired pdnsclient.RRSet) bool {
+	for _, got := range pz.RRSets {
+		if got.Name != desired.Name || got.Type != desired.Type {
+			continue
+		}
+		if got.TTL != desired.TTL || len(got.Records) != len(desired.Records) {
+			return false
+		}
+		want := make(map[string]int, len(desired.Records))
+		for _, rec := range desired.Records {
+			want[rec.Content]++
+		}
+		for _, rec := range got.Records {
+			if want[rec.Content] == 0 {
+				return false
+			}
+			want[rec.Content]--
+		}
+		return true
+	}
+	return false
+}
+
+func (r *RRSetReconciler) event(obj runtime.Object, eventType, reason, message string) {
+	if r.Recorder == nil {
+		return
+	}
+	r.Recorder.Event(obj, eventType, reason, message)
 }
 
 // nameInZone reports whether name equals the zone apex or sits beneath it.

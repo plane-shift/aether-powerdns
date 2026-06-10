@@ -256,3 +256,83 @@ func TestRRSetCrossNamespaceDenied(t *testing.T) {
 		t.Errorf("want NamespaceNotAllowed, got %+v", cond)
 	}
 }
+
+func TestRRSetDeleteOrphanKeepsRecords(t *testing.T) {
+	f := newFakePDNS(t)
+	f.seedZone("example.com.", "Native")
+	server, secret := readyServer("pdns", "dns", f)
+	rr := wwwRRSet("dns")
+	rr.Spec.DeletionPolicy = dnsv1alpha1.DeletionPolicyOrphan
+	r, c := newRRSetReconciler(t, server, secret, readyZone("dns"), rr)
+	key := types.NamespacedName{Name: "www-example-com", Namespace: "dns"}
+
+	reconcileRRSetN(t, r, key, 3)
+	if _, ok := f.getRRSet("example.com.", "www.example.com.", "A"); !ok {
+		t.Fatal("precondition: rrset applied")
+	}
+	if err := c.Delete(context.Background(), getRR(t, c, key)); err != nil {
+		t.Fatal(err)
+	}
+	reconcileRRSetN(t, r, key, 2)
+	if _, ok := f.getRRSet("example.com.", "www.example.com.", "A"); !ok {
+		t.Error("Orphan policy must leave the rrset in PowerDNS")
+	}
+}
+
+func TestRRSetApplyFailureRetries(t *testing.T) {
+	f := newFakePDNS(t)
+	f.seedZone("example.com.", "Native")
+	server, secret := readyServer("pdns", "dns", f)
+	r, c := newRRSetReconciler(t, server, secret, readyZone("dns"), wwwRRSet("dns"))
+	key := types.NamespacedName{Name: "www-example-com", Namespace: "dns"}
+
+	reconcileRRSetN(t, r, key, 1) // finalizer pass
+	f.mu.Lock()
+	f.failNextPatch = true
+	f.mu.Unlock()
+	reconcileRRSetN(t, r, key, 1)
+
+	cond := meta.FindStatusCondition(getRR(t, c, key).Status.Conditions, dnsv1alpha1.ConditionReady)
+	if cond == nil || cond.Status != metav1.ConditionFalse {
+		t.Fatalf("apply failure must surface Ready=False, got %+v", cond)
+	}
+
+	reconcileRRSetN(t, r, key, 2)
+	if _, ok := f.getRRSet("example.com.", "www.example.com.", "A"); !ok {
+		t.Error("rrset should be applied on the retry pass")
+	}
+}
+
+func TestRRSetZoneNotFound(t *testing.T) {
+	rr := wwwRRSet("dns")
+	r, c := newRRSetReconciler(t, rr)
+	key := types.NamespacedName{Name: "www-example-com", Namespace: "dns"}
+
+	reconcileRRSetN(t, r, key, 3)
+
+	cond := meta.FindStatusCondition(getRR(t, c, key).Status.Conditions, dnsv1alpha1.ConditionReady)
+	if cond == nil || cond.Reason != "ZoneNotFound" {
+		t.Errorf("want ZoneNotFound, got %+v", cond)
+	}
+}
+
+func TestRRSetResyncDoesNotBumpSerial(t *testing.T) {
+	f := newFakePDNS(t)
+	f.seedZone("example.com.", "Native")
+	server, secret := readyServer("pdns", "dns", f)
+	r, _ := newRRSetReconciler(t, server, secret, readyZone("dns"), wwwRRSet("dns"))
+	key := types.NamespacedName{Name: "www-example-com", Namespace: "dns"}
+
+	reconcileRRSetN(t, r, key, 3)
+	f.mu.Lock()
+	after := f.zones["example.com."].Serial
+	f.mu.Unlock()
+
+	reconcileRRSetN(t, r, key, 3) // pure resyncs, nothing changed
+	f.mu.Lock()
+	final := f.zones["example.com."].Serial
+	f.mu.Unlock()
+	if final != after {
+		t.Errorf("unchanged rrset must not PATCH on resync (serial %d → %d)", after, final)
+	}
+}

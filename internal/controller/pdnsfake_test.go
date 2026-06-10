@@ -90,7 +90,12 @@ func (f *fakePDNS) handle(w http.ResponseWriter, r *http.Request) {
 
 	switch {
 	case len(parts) == 1 && r.Method == http.MethodGet:
-		_ = json.NewEncoder(w).Encode(z)
+		zc := *z
+		zc.RRSets = nil
+		for _, rr := range f.rrsets[zoneName] {
+			zc.RRSets = append(zc.RRSets, rr)
+		}
+		_ = json.NewEncoder(w).Encode(&zc)
 	case len(parts) == 1 && r.Method == http.MethodPut:
 		var u pdnsclient.ZoneUpdate
 		if err := json.NewDecoder(r.Body).Decode(&u); err != nil {
