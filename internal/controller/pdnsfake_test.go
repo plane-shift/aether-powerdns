@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -75,7 +76,11 @@ func (f *fakePDNS) handle(w http.ResponseWriter, r *http.Request) {
 	}
 
 	parts := strings.SplitN(strings.TrimPrefix(path, "/"), "/", 3)
-	zoneName := parts[0]
+	zoneName, err := url.PathUnescape(parts[0])
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	z, ok := f.zones[zoneName]
 	if !ok {
 		w.WriteHeader(http.StatusNotFound)
@@ -87,7 +92,10 @@ func (f *fakePDNS) handle(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(z)
 	case len(parts) == 1 && r.Method == http.MethodPut:
 		var u pdnsclient.ZoneUpdate
-		_ = json.NewDecoder(r.Body).Decode(&u)
+		if err := json.NewDecoder(r.Body).Decode(&u); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
 		z.Kind, z.Masters = u.Kind, u.Masters
 		w.WriteHeader(http.StatusNoContent)
 	case len(parts) == 1 && r.Method == http.MethodDelete:
@@ -99,7 +107,10 @@ func (f *fakePDNS) handle(w http.ResponseWriter, r *http.Request) {
 		var body struct {
 			RRSets []pdnsclient.RRSet `json:"rrsets"`
 		}
-		_ = json.NewDecoder(r.Body).Decode(&body)
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
 		for _, rr := range body.RRSets {
 			key := rr.Name + "|" + rr.Type
 			switch rr.ChangeType {
@@ -122,7 +133,10 @@ func (f *fakePDNS) handle(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(keys)
 	case len(parts) == 2 && parts[1] == "cryptokeys" && r.Method == http.MethodPost:
 		var k pdnsclient.Cryptokey
-		_ = json.NewDecoder(r.Body).Decode(&k)
+		if err := json.NewDecoder(r.Body).Decode(&k); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
 		k.ID = f.nextKeyID
 		f.nextKeyID++
 		k.DS = []string{strconv.Itoa(k.ID*11111) + " 13 2 deadbeef"}
@@ -130,9 +144,16 @@ func (f *fakePDNS) handle(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusCreated)
 		_ = json.NewEncoder(w).Encode(k)
 	case len(parts) == 3 && parts[1] == "cryptokeys" && r.Method == http.MethodPut:
-		id, _ := strconv.Atoi(parts[2])
+		id, err := strconv.Atoi(parts[2])
+		if err != nil {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
 		var k pdnsclient.Cryptokey
-		_ = json.NewDecoder(r.Body).Decode(&k)
+		if err := json.NewDecoder(r.Body).Decode(&k); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
 		for i := range f.keys[zoneName] {
 			if f.keys[zoneName][i].ID == id {
 				f.keys[zoneName][i].Active = k.Active
@@ -167,6 +188,7 @@ func (f *fakePDNS) seedZone(name, kind string) {
 	defer f.mu.Unlock()
 	f.zones[name] = &pdnsclient.Zone{ID: name, Name: name, Kind: kind, Serial: 1, Nameservers: []string{}}
 	f.rrsets[name] = map[string]pdnsclient.RRSet{}
+	f.keys[name] = []pdnsclient.Cryptokey{}
 }
 
 // zoneKeys returns a copy of the zone's cryptokeys.
