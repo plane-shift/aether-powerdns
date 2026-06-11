@@ -40,26 +40,36 @@ spec:
             spec:
               type: object
               required: [zoneRef, name, type, records]
-              x-kubernetes-validations:
-                - rule: "self.zoneRef.name == oldSelf.zoneRef.name && (has(self.zoneRef.namespace) ? self.zoneRef.namespace : '') == (has(oldSelf.zoneRef.namespace) ? oldSelf.zoneRef.namespace : '')"
-                  message: "zoneRef is immutable after creation — delete and recreate to move a record"
-                - rule: "self.name == oldSelf.name"
-                  message: "name is immutable after creation — delete and recreate to rename"
-                - rule: "self.type == oldSelf.type"
-                  message: "type is immutable after creation — delete and recreate to retype"
+              # Immutability rules live on the narrowest field/object schema
+              # below, which keeps the CEL cost estimate within the
+              # apiserver's per-schema budget.
               properties:
                 zoneRef:
                   type: object
                   required: [name]
+                  x-kubernetes-validations:
+                    - rule: "self == oldSelf"
+                      message: "zoneRef is immutable after creation — delete and recreate to move a record"
                   properties:
-                    name: { type: string, minLength: 1 }
-                    namespace: { type: string }
+                    # maxLength bounds keep the CEL rules within the
+                    # apiserver's cost budget (unbounded strings are
+                    # costed at worst case and get rejected).
+                    name: { type: string, minLength: 1, maxLength: 253 }
+                    namespace: { type: string, maxLength: 63 }
                 name:
                   type: string
+                  maxLength: 253
                   pattern: '^(\*\.)?([a-z0-9_][a-z0-9_\-]*\.)+$'
+                  x-kubernetes-validations:
+                    - rule: "self == oldSelf"
+                      message: "name is immutable after creation — delete and recreate to rename"
                 type:
                   type: string
+                  maxLength: 16
                   pattern: '^[A-Z0-9]+$'
+                  x-kubernetes-validations:
+                    - rule: "self == oldSelf"
+                      message: "type is immutable after creation — delete and recreate to retype"
                 ttl:
                   type: integer
                   format: int32
@@ -68,9 +78,11 @@ spec:
                 records:
                   type: array
                   minItems: 1
+                  maxItems: 64
                   items:
                     type: string
                     minLength: 1
+                    maxLength: 4096
                 deletionPolicy:
                   type: string
                   enum: [Delete, Orphan]
