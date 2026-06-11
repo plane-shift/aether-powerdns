@@ -124,7 +124,9 @@ matches the running PowerDNS version.
   by default so PowerDNS sees real client source IPs (important for ACL/logging)
 - `gateway` — Gateway API `TCPRoute` + `UDPRoute` attached to one or more
   user-supplied Gateways via `parentRefs[]`. Each parent may pick its own
-  TCP/UDP listener via `tcpSectionName` / `udpSectionName`.
+  TCP/UDP listener via `tcpSectionName` / `udpSectionName`. `parentRefs`
+  items accept optional `group` (default `gateway.networking.k8s.io`) and
+  `kind` (default `Gateway`) for non-standard gateway implementations.
 
 For "one Deployment, multiple public IPs" use either:
 - `spec.dns.loadBalancer.additionalServices[]` — extra LB Services
@@ -139,8 +141,19 @@ For "one Deployment, multiple Gateways" use `gateway.parentRefs[]` —
 TCPRoute and UDPRoute support multi-parent natively, so still only one
 route resource per protocol.
 
-The HTTP API stays on ClusterIP. **Don't** expose it externally by default —
-it's an admin surface, and a leaked key gives full zone control.
+The HTTP API stays ClusterIP by default. `spec.api.gateway` (optional)
+additionally exposes it via a Gateway API HTTPRoute (`<server>-api-http`,
+PathPrefix `/`, optional hostnames, full parentRefs incl. group/kind) —
+independent of `dns.exposure`. It's an admin surface: attach only to TLS
+listeners, set hostnames on shared gateways, and with
+networkPolicy.enabled add the gateway's namespace to
+`additionalAllowedAPINamespaces`. `status.apiEndpoint` stays the
+ClusterIP URL (Zone/RRSet controllers consume it). Routes (TCP/UDP/HTTP)
+are drift-corrected by `reconcileRoutes` (CreateOrUpdate from
+phaseExposingDNS + reconcileDrift; disabled routes deleted). Gateway
+route types are deliberately NOT in `Owns()` — their informers would
+hard-require the Gateway API CRDs at manager start; drift heals on the
+30s requeue instead.
 
 ## Observability
 

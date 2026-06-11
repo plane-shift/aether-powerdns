@@ -78,7 +78,9 @@ dns:
   exposure: gateway
   gateway:
     parentRefs:                     # one or more Gateways; same TCP/UDPRoute attaches to all
-      - name: aether-edge-1
+      - group: gateway.networking.k8s.io  # optional; defaults to gateway.networking.k8s.io
+        kind: Gateway                     # optional; defaults to Gateway
+        name: aether-edge-1
         namespace: gateway-system
         tcpSectionName: dns-tcp     # listener on this Gateway, optional
         udpSectionName: dns-udp
@@ -87,6 +89,12 @@ dns:
         tcpSectionName: dns-tcp
         udpSectionName: dns-udp
 ```
+
+`parentRefs` accepts full Gateway API references. `group` and `kind` are
+optional and default to `gateway.networking.k8s.io` and `Gateway`
+respectively — omit them for the common case. Changes to `parentRefs`
+(adding/removing parents, updating section names) propagate to the live
+TCPRoute and UDPRoute within the Ready loop (≤30 s).
 
 ## `api`
 
@@ -98,8 +106,58 @@ api:
 ```
 
 When `apiKeySecretRef` is unset the operator generates a 64-char hex key
-into `<server>-api-key`. The API stays on ClusterIP — never exposes
-externally — because a leaked key gives full zone control.
+into `<server>-api-key`. The API stays on ClusterIP by default — a
+leaked key gives full zone control.
+
+### `api.gateway` — optional HTTPRoute exposure
+
+Exposes the HTTP API via a Gateway API `HTTPRoute` named
+`<server>-api-http`. Independent of `spec.dns.exposure` — you can use
+`dns.exposure: loadBalancer` for DNS and still attach the API to a
+Gateway, or vice versa.
+
+```yaml
+api:
+  gateway:
+    hostnames:                        # optional; empty list matches ALL hostnames on the listener
+      - pdns-api.internal.example.com
+    parentRefs:                       # required; at least one entry with name set
+      - group: gateway.networking.k8s.io  # optional; defaults to gateway.networking.k8s.io
+        kind: Gateway                     # optional; defaults to Gateway
+        name: eg
+        namespace: envoy-gateway-system
+        sectionName: https            # target a specific listener, optional
+```
+
+The HTTPRoute uses a single `PathPrefix /` rule forwarding to the
+`<server>-api` ClusterIP Service on the API port. `status.apiEndpoint`
+always reports the in-cluster ClusterIP URL — Zone and RRSet controllers
+consume it directly and are not affected by gateway exposure.
+
+When `api.gateway` is unset (the default), the API is ClusterIP-only.
+Setting `hostnames: []` (or omitting `hostnames`) matches **all**
+hostnames on the listener — only do this on a listener that is already
+hostname-restricted or dedicated to this server.
+
+**Security:** attach `api.gateway` only to TLS listeners (port 443 /
+HTTPS). On a shared gateway, always set `hostnames` to prevent other
+routes from accidentally matching API traffic. With
+`networkPolicy.enabled=true`, the gateway's namespace (e.g.
+`envoy-gateway-system`) must be listed in
+`networkPolicy.additionalAllowedAPINamespaces` or the gateway pods
+cannot reach the API port:
+
+```yaml
+networkPolicy:
+  enabled: true
+  additionalAllowedAPINamespaces:
+    - envoy-gateway-system
+```
+
+An `APIExposed` event fires when the HTTPRoute is first created. Route
+changes (adding/removing parentRefs or hostnames) propagate within the
+Ready loop (≤30 s); removing `api.gateway` entirely deletes the
+HTTPRoute.
 
 ## `scheduling`
 
