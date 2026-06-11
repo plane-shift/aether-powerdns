@@ -238,11 +238,15 @@ Both `PowerDNSServer` and `DNSDist` create a `PodDisruptionBudget` when
 `replicas > 1`. The default `minAvailable` is `replicas - 1`; override it
 via `spec.podDisruptionBudget.minAvailable`.
 
-Rules enforced at admission (CEL):
-- `minAvailable` must be **at least 1** and **strictly less than replicas**
-  (`minAvailable == replicas` would block all voluntary disruptions).
-- No PDB is rendered when `replicas` is 1 — a 1-replica PDB would
-  block node drains entirely.
+Validation rules:
+- `minAvailable >= 1` is enforced by OpenAPI schema validation at admission
+  (`kubectl apply` rejects values below 1 immediately).
+- `minAvailable < replicas` is enforced by the controller at reconcile time —
+  `kubectl apply` succeeds, but the CR transitions to `phase=Failed` with a
+  `status.failureMessage` explaining the conflict. Setting `minAvailable ==
+  replicas` would block all voluntary disruptions and is rejected this way.
+- No PDB is rendered when `replicas` is 1 — this is render behavior, not
+  validation; a 1-replica PDB would block node drains entirely.
 
 ```yaml
 # On a PowerDNSServer or DNSDist with replicas: 3
@@ -313,7 +317,7 @@ spec:
 | `dns` | _(none)_ | Identical semantics to `PowerDNSServer.spec.dns` — `none`/`loadBalancer`/`gateway`. `additionalServices` works here too. |
 | `cache.enabled` | `true` | Toggle the dnsdist packet cache. |
 | `cache.maxEntries` | `100000` | Maximum cached entries. Minimum 1024. |
-| `rateLimit.qpsPerClient` | `0` (off) | Queries-per-second threshold per source IP. Excess queries are dropped. `0` disables rate limiting. |
+| `rateLimit.qpsPerClient` | `0` (off) | Queries-per-second threshold per source IP. A client that exceeds this rate over a 10-second measurement window is blocked entirely for 60 seconds. `0` disables rate limiting. |
 | `tls.dot.enabled` | `false` | DNS-over-TLS listener on port 853. Requires `tls.dot.certificateSecretRef`. |
 | `tls.doh.enabled` | `false` | DNS-over-HTTPS listener on port 443 at `/dns-query`. Requires `tls.doh.certificateSecretRef`. |
 | `tls.*.certificateSecretRef.name` | _(none)_ | Name of a `kubernetes.io/tls` Secret (e.g. cert-manager issued) in the same namespace. |

@@ -210,6 +210,15 @@ func DNSDistDeployment(d *dnsv1alpha1.DNSDist, configHash string) *appsv1.Deploy
 			WhenUnsatisfiable: corev1.ScheduleAnyway,
 			LabelSelector:     &metav1.LabelSelector{MatchLabels: lbls},
 		}}
+		if d.Spec.Scheduling.SpreadAcrossZones {
+			podSpec.TopologySpreadConstraints = append(podSpec.TopologySpreadConstraints,
+				corev1.TopologySpreadConstraint{
+					MaxSkew:           1,
+					TopologyKey:       corev1.LabelTopologyZone,
+					WhenUnsatisfiable: corev1.ScheduleAnyway,
+					LabelSelector:     &metav1.LabelSelector{MatchLabels: lbls},
+				})
+		}
 	}
 
 	return &appsv1.Deployment{

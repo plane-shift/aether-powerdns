@@ -170,6 +170,9 @@ Gateway route types are deliberately NOT in `Owns()` — their informers would
 hard-require the Gateway API CRDs at manager start; drift heals on the
 30s requeue instead.
 
+When a `DNSDist` fronts the server, gateway/LB exposure moves entirely to the
+`DNSDist`; the `PowerDNSServer` runs `dns.exposure: none` (see `## DNSDist`).
+
 ## Observability
 
 `spec.observability.podMonitor.enabled=true` creates a `PodMonitor`
@@ -261,20 +264,23 @@ GC'd by owner-reference cascade). All generated resource names are prefixed
 alphabetically by PowerDNSServer name before emitting `newServer()` calls.
 This ensures the rendered ConfigMap is identical across reconcile passes so
 the config-hash annotation is stable and rolling restarts are not triggered
-spuriously. `setACL("0.0.0.0/0", "::/0")` is mandatory — dnsdist's default
+spuriously. `setACL({"0.0.0.0/0", "::/0"})` is mandatory — dnsdist's default
 ACL is RFC1918-only and would silently drop public queries.
 
 **BackendRefs**: same-namespace only; the `namespace` field on each ref must
-be empty. Duplicate `name` values are rejected by `validateDNSDist` (both
-entires have their name checked). The operator resolves each ref to the
-backing server's ClusterIP Service FQDN + port 53 (service-level addressing,
-not per-pod). A missing or non-Ready backend server sets `BackendsReady=False`
-on the `DNSDist` status but does NOT block reconciliation — dnsdist itself
-handles backend health checks at runtime.
+be empty. Duplicate `name` values are rejected by `validateDNSDist` — the
+entire CR is failed at the first duplicate found. The operator resolves each
+ref to the backing server's ClusterIP Service FQDN + port 53 (service-level
+addressing, not per-pod). Children (ConfigMap, Deployment, Service, PDB,
+routes) are only created once every backendRef resolves to a `PowerDNSServer`
+in `phase=Ready`; a missing or non-Ready backend sets `BackendsReady=False`
+and requeues without creating any child resources. After all backends are
+Ready, runtime health is delegated to dnsdist's own active health checks
+(`checkInterval=2, maxCheckFailures=2`).
 
 **Exposure**: `spec.dns` mirrors `PowerDNSServer.spec.dns` exactly
 (`none`/`loadBalancer`/`gateway`). Gateway routes and `additionalServices`
-target the `<name>-dnsdist` Service (the dnsdist pod selector), NOT the
+target the `<name>-dnsdist-dns` Service (the dnsdist pod selector), NOT the
 backing pdns Services. The backing `PowerDNSServer` resources MUST run
 `dns.exposure: none` — exposing both sides results in clients potentially
 bypassing dnsdist.

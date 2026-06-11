@@ -23,7 +23,9 @@ A `DNSDist` resource deploys a [dnsdist](https://dnsdist.org) load-balancer
 tier in front of one or more `PowerDNSServer` backends in the same namespace.
 dnsdist health-checks each backend and stops routing to unhealthy replicas —
 combined with a `replicas: 2` `PowerDNSServer` this gives automatic failover
-with no query loss during a single-pod failure. The tier also provides a
+within seconds during a single-pod failure (with `checkInterval=2,
+maxCheckFailures=2` a dead backend is marked down in ~4 s; in-flight queries
+during that window may be lost). The tier also provides a
 configurable packet cache (reduces backend load for repeated queries), per-
 client rate limiting (drops abusive clients before queries reach PowerDNS),
 and optional DNS-over-TLS / DNS-over-HTTPS termination. When a `DNSDist` is

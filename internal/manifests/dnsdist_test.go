@@ -228,6 +228,42 @@ func TestDNSDistAdditionalDNSServices(t *testing.T) {
 	}
 }
 
+func TestDNSDistSpreadAcrossZones(t *testing.T) {
+	// replicas=2 + SpreadAcrossZones=true → zone TSC must be present
+	d := testDNSDist()
+	d.Spec.Scheduling.SpreadAcrossZones = true
+	dep := DNSDistDeployment(d, "")
+	tscs := dep.Spec.Template.Spec.TopologySpreadConstraints
+	var hasZone bool
+	for _, tsc := range tscs {
+		if tsc.TopologyKey == corev1.LabelTopologyZone {
+			hasZone = true
+		}
+	}
+	if !hasZone {
+		t.Errorf("replicas>1 + SpreadAcrossZones=true must add a zone TopologySpreadConstraint; got %+v", tscs)
+	}
+
+	// replicas=2 + SpreadAcrossZones=false (default) → only hostname TSC
+	d2 := testDNSDist()
+	dep2 := DNSDistDeployment(d2, "")
+	for _, tsc := range dep2.Spec.Template.Spec.TopologySpreadConstraints {
+		if tsc.TopologyKey == corev1.LabelTopologyZone {
+			t.Errorf("SpreadAcrossZones=false must NOT add zone TSC; got %+v", dep2.Spec.Template.Spec.TopologySpreadConstraints)
+		}
+	}
+
+	// replicas=1 → no TSC at all (no HA constraints when single replica)
+	one := int32(1)
+	d3 := testDNSDist()
+	d3.Spec.Replicas = &one
+	d3.Spec.Scheduling.SpreadAcrossZones = true
+	dep3 := DNSDistDeployment(d3, "")
+	if len(dep3.Spec.Template.Spec.TopologySpreadConstraints) > 0 {
+		t.Errorf("replicas=1 must not set any TopologySpreadConstraints; got %+v", dep3.Spec.Template.Spec.TopologySpreadConstraints)
+	}
+}
+
 func TestDNSDistConfigDeterministic(t *testing.T) {
 	d := testDNSDist()
 	first := DNSDistConfig(d)
