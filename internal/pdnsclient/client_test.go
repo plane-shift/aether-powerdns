@@ -86,7 +86,8 @@ func TestPatchRRSets(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			t.Fatalf("decode body: %v", err)
 		}
-		if len(body.RRSets) != 1 || body.RRSets[0].ChangeType != "REPLACE" || body.RRSets[0].Records[0].Content != "203.0.113.10" {
+		if len(body.RRSets) != 1 || body.RRSets[0].ChangeType != "REPLACE" ||
+			len(body.RRSets[0].Records) != 1 || body.RRSets[0].Records[0].Content != "203.0.113.10" {
 			t.Errorf("unexpected rrsets payload: %+v", body.RRSets)
 		}
 		w.WriteHeader(http.StatusNoContent)

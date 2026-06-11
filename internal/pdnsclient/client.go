@@ -113,9 +113,9 @@ func (c *Client) do(ctx context.Context, method, path string, in, out any) error
 	}
 	resp, err := c.httpc.Do(req)
 	if err != nil {
-		return fmt.Errorf("%w: %v", ErrUnreachable, err)
+		return fmt.Errorf("%w: %w", ErrUnreachable, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode == http.StatusNotFound {
 		return ErrNotFound

@@ -52,7 +52,7 @@ spec:
                   type: object
                   required: [name]
                   properties:
-                    name: { type: string }
+                    name: { type: string, minLength: 1 }
                     namespace: { type: string }
                 name:
                   type: string
@@ -68,7 +68,9 @@ spec:
                 records:
                   type: array
                   minItems: 1
-                  items: { type: string }
+                  items:
+                    type: string
+                    minLength: 1
                 deletionPolicy:
                   type: string
                   enum: [Delete, Orphan]

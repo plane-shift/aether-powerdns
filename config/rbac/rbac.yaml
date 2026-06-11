@@ -20,7 +20,9 @@ rules:
     verbs: ["update"]
   - apiGroups: ["dns.aetherplatform.cloud"]
     resources: ["zones", "rrsets"]
-    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+    # No create/delete: Zone/RRSet are user-owned; the operator only reads
+    # them and mutates finalizers (update) — least privilege.
+    verbs: ["get", "list", "watch", "update", "patch"]
   - apiGroups: ["dns.aetherplatform.cloud"]
     resources: ["zones/status", "rrsets/status"]
     verbs: ["get", "update", "patch"]

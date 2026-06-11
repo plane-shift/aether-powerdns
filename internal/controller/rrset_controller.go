@@ -42,7 +42,7 @@ type RRSetReconciler struct {
 	Recorder record.EventRecorder
 }
 
-// +kubebuilder:rbac:groups=dns.aetherplatform.cloud,resources=rrsets,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=dns.aetherplatform.cloud,resources=rrsets,verbs=get;list;watch;update;patch
 // +kubebuilder:rbac:groups=dns.aetherplatform.cloud,resources=rrsets/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=dns.aetherplatform.cloud,resources=rrsets/finalizers,verbs=update
 
