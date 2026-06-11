@@ -82,6 +82,14 @@ func gatewayParents(s *dnsv1alpha1.PowerDNSServer, proto gatewayProto) []gateway
 			ns = s.Namespace
 		}
 		ref := gatewayv1.ParentReference{Name: gatewayv1.ObjectName(p.Name)}
+		if p.Group != "" {
+			g := gatewayv1.Group(p.Group)
+			ref.Group = &g
+		}
+		if p.Kind != "" {
+			k := gatewayv1.Kind(p.Kind)
+			ref.Kind = &k
+		}
 		if ns != s.Namespace {
 			nsRef := gatewayv1.Namespace(ns)
 			ref.Namespace = &nsRef
@@ -100,4 +108,72 @@ func gatewayParents(s *dnsv1alpha1.PowerDNSServer, proto gatewayProto) []gateway
 		out = append(out, ref)
 	}
 	return out
+}
+
+// HTTPRoute exposes the PowerDNS HTTP API through the Gateways listed in
+// spec.api.gateway.parentRefs. Opt-in only — the API is an admin surface
+// (a leaked key gives full zone control); pair with TLS listeners and
+// hostnames. Returns nil when spec.api.gateway is unset.
+func HTTPRoute(s *dnsv1alpha1.PowerDNSServer) *gatewayv1.HTTPRoute {
+	gw := s.Spec.API.Gateway
+	if gw == nil {
+		return nil
+	}
+	names := NameSet(s)
+	api := apiSpecOrDefault(s)
+
+	parents := make([]gatewayv1.ParentReference, 0, len(gw.ParentRefs))
+	for _, p := range gw.ParentRefs {
+		ref := gatewayv1.ParentReference{Name: gatewayv1.ObjectName(p.Name)}
+		if p.Group != "" {
+			g := gatewayv1.Group(p.Group)
+			ref.Group = &g
+		}
+		if p.Kind != "" {
+			k := gatewayv1.Kind(p.Kind)
+			ref.Kind = &k
+		}
+		if p.Namespace != "" && p.Namespace != s.Namespace {
+			ns := gatewayv1.Namespace(p.Namespace)
+			ref.Namespace = &ns
+		}
+		if p.SectionName != "" {
+			sn := gatewayv1.SectionName(p.SectionName)
+			ref.SectionName = &sn
+		}
+		parents = append(parents, ref)
+	}
+
+	var hostnames []gatewayv1.Hostname
+	for _, h := range gw.Hostnames {
+		hostnames = append(hostnames, gatewayv1.Hostname(h))
+	}
+
+	pathType := gatewayv1.PathMatchPathPrefix
+	pathValue := "/"
+	port := gatewayv1.PortNumber(api.Port)
+	return &gatewayv1.HTTPRoute{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      names.HTTPRoute,
+			Namespace: s.Namespace,
+			Labels:    labels(s),
+		},
+		Spec: gatewayv1.HTTPRouteSpec{
+			CommonRouteSpec: gatewayv1.CommonRouteSpec{ParentRefs: parents},
+			Hostnames:       hostnames,
+			Rules: []gatewayv1.HTTPRouteRule{{
+				Matches: []gatewayv1.HTTPRouteMatch{{
+					Path: &gatewayv1.HTTPPathMatch{Type: &pathType, Value: &pathValue},
+				}},
+				BackendRefs: []gatewayv1.HTTPBackendRef{{
+					BackendRef: gatewayv1.BackendRef{
+						BackendObjectReference: gatewayv1.BackendObjectReference{
+							Name: gatewayv1.ObjectName(names.APIService),
+							Port: &port,
+						},
+					},
+				}},
+			}},
+		},
+	}
 }
