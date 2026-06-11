@@ -94,6 +94,9 @@ func (r *DNSDistReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 			continue
 		}
 		sec := &corev1.Secret{}
+		// Cache-backed Get is intentional: RBAC already grants secrets read,
+		// and any staleness in the hash is self-correcting on the next reconcile
+		// (the config-hash annotation drives the rolling restart regardless).
 		err := r.Get(ctx, types.NamespacedName{Name: tlsCfg.name, Namespace: d.Namespace}, sec)
 		if apierrors.IsNotFound(err) {
 			// Secret not yet present; fold just the name so the hash is stable

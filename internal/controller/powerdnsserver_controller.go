@@ -397,7 +397,11 @@ func (r *PowerDNSServerReconciler) reconcileAdditionalDNSServices(ctx context.Co
 			svc.Labels = map[string]string{}
 		}
 		svc.Labels["dns.aetherplatform.cloud/role"] = "additional-dns"
-		if err := r.ensureOwned(ctx, s, svc); err != nil {
+		// Use the drift-correcting updateService wrapper (not ensureOwned) so
+		// edits to IP/annotations/externalTrafficPolicy in the spec propagate
+		// to live Services. The role label survives because updateService merges
+		// annotations and the desired svc already carries it above.
+		if err := r.updateService(ctx, s, svc); err != nil {
 			return err
 		}
 		desiredNames[svc.Name] = struct{}{}
@@ -926,11 +930,13 @@ func (r *PowerDNSServerReconciler) ensureUnstructured(ctx context.Context, s *dn
 	return err
 }
 
-func (r *PowerDNSServerReconciler) updateDeployment(ctx context.Context, _ *dnsv1alpha1.PowerDNSServer, desired *appsv1.Deployment) error {
+func (r *PowerDNSServerReconciler) updateDeployment(ctx context.Context, s *dnsv1alpha1.PowerDNSServer, desired *appsv1.Deployment) error {
 	existing := &appsv1.Deployment{}
 	err := r.Get(ctx, types.NamespacedName{Name: desired.Name, Namespace: desired.Namespace}, existing)
 	if apierrors.IsNotFound(err) {
-		return r.Create(ctx, desired)
+		// Use ensureOwned so the recreated Deployment carries a controller
+		// reference — without it GC and watch fan-out both break.
+		return r.ensureOwned(ctx, s, desired)
 	}
 	if err != nil {
 		return err
