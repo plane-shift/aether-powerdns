@@ -77,10 +77,6 @@ func gatewayParents(s *dnsv1alpha1.PowerDNSServer, proto gatewayProto) []gateway
 	}
 	out := make([]gatewayv1.ParentReference, 0, len(s.Spec.DNS.Gateway.ParentRefs))
 	for _, p := range s.Spec.DNS.Gateway.ParentRefs {
-		ns := p.Namespace
-		if ns == "" {
-			ns = s.Namespace
-		}
 		ref := gatewayv1.ParentReference{Name: gatewayv1.ObjectName(p.Name)}
 		if p.Group != "" {
 			g := gatewayv1.Group(p.Group)
@@ -90,8 +86,8 @@ func gatewayParents(s *dnsv1alpha1.PowerDNSServer, proto gatewayProto) []gateway
 			k := gatewayv1.Kind(p.Kind)
 			ref.Kind = &k
 		}
-		if ns != s.Namespace {
-			nsRef := gatewayv1.Namespace(ns)
+		if p.Namespace != "" && p.Namespace != s.Namespace {
+			nsRef := gatewayv1.Namespace(p.Namespace)
 			ref.Namespace = &nsRef
 		}
 		var sn string
@@ -102,8 +98,8 @@ func gatewayParents(s *dnsv1alpha1.PowerDNSServer, proto gatewayProto) []gateway
 			sn = p.UDPSectionName
 		}
 		if sn != "" {
-			s := gatewayv1.SectionName(sn)
-			ref.SectionName = &s
+			snRef := gatewayv1.SectionName(sn)
+			ref.SectionName = &snRef
 		}
 		out = append(out, ref)
 	}
@@ -123,6 +119,7 @@ func HTTPRoute(s *dnsv1alpha1.PowerDNSServer) *gatewayv1.HTTPRoute {
 	api := apiSpecOrDefault(s)
 
 	parents := make([]gatewayv1.ParentReference, 0, len(gw.ParentRefs))
+	// Same construction rules as gatewayParents — keep the two in sync.
 	for _, p := range gw.ParentRefs {
 		ref := gatewayv1.ParentReference{Name: gatewayv1.ObjectName(p.Name)}
 		if p.Group != "" {

@@ -155,3 +155,12 @@ func TestHTTPRouteDefaultAPIPort(t *testing.T) {
 		t.Errorf("default api port = %v, want 8081", b.Port)
 	}
 }
+
+func TestHTTPRouteNilWhenNoGateway(t *testing.T) {
+	s := &dnsv1alpha1.PowerDNSServer{
+		ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "default"},
+	}
+	if HTTPRoute(s) != nil {
+		t.Error("HTTPRoute must return nil when spec.api.gateway is unset")
+	}
+}
