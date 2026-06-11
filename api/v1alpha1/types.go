@@ -128,6 +128,11 @@ type PowerDNSServerSpec struct {
 	// to target this server. Same-namespace resources are always allowed.
 	// +optional
 	ZoneManagement ZoneManagementSpec `json:"zoneManagement,omitempty"`
+
+	// PodDisruptionBudget overrides the default minAvailable (replicas-1)
+	// of the PDB rendered when replicas > 1.
+	// +optional
+	PodDisruptionBudget *PDBSpec `json:"podDisruptionBudget,omitempty"`
 }
 
 // SchedulingSpec controls where pdns pods land.

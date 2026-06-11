@@ -23,5 +23,6 @@ func init() {
 		&PowerDNSServer{}, &PowerDNSServerList{},
 		&Zone{}, &ZoneList{},
 		&RRSet{}, &RRSetList{},
+		&DNSDist{}, &DNSDistList{},
 	)
 }
