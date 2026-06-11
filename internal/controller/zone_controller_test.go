@@ -366,3 +366,43 @@ func TestZoneSOASeedFailureRollsBackAndRetries(t *testing.T) {
 		t.Errorf("unexpected SOA content: %q", soa.Records[0].Content)
 	}
 }
+
+// Issue: zones created WITHOUT spec.soa used to inherit PowerDNS's
+// default-soa-content placeholder ("a.misconfigured.dns.server.invalid.").
+// The operator must always seed a correct SOA on creation.
+func TestZoneSeedsDefaultSOAWhenUnset(t *testing.T) {
+	f := newFakePDNS(t)
+	server, secret := readyServer("pdns", "dns", f)
+	zone := basicZone("dns") // nameservers: [ns1.example.com.], no spec.soa
+	r, _ := newZoneReconciler(t, server, secret, zone)
+
+	reconcileZoneN(t, r, types.NamespacedName{Name: "example-com", Namespace: "dns"}, 3)
+
+	soa, ok := f.getRRSet("example.com.", "example.com.", "SOA")
+	if !ok {
+		t.Fatal("SOA must be seeded even without spec.soa")
+	}
+	want := "ns1.example.com. hostmaster.example.com. 0 10800 3600 604800 3600"
+	if soa.Records[0].Content != want {
+		t.Errorf("SOA = %q, want %q (primary = first nameserver, default hostmaster)", soa.Records[0].Content, want)
+	}
+}
+
+func TestZoneDefaultSOAWithoutNameserversUsesApex(t *testing.T) {
+	f := newFakePDNS(t)
+	server, secret := readyServer("pdns", "dns", f)
+	zone := basicZone("dns")
+	zone.Spec.Nameservers = nil
+	r, _ := newZoneReconciler(t, server, secret, zone)
+
+	reconcileZoneN(t, r, types.NamespacedName{Name: "example-com", Namespace: "dns"}, 3)
+
+	soa, ok := f.getRRSet("example.com.", "example.com.", "SOA")
+	if !ok {
+		t.Fatal("SOA must be seeded")
+	}
+	want := "example.com. hostmaster.example.com. 0 10800 3600 604800 3600"
+	if soa.Records[0].Content != want {
+		t.Errorf("SOA = %q, want apex-as-primary fallback %q", soa.Records[0].Content, want)
+	}
+}

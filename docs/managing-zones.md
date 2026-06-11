@@ -67,7 +67,7 @@ spec:
 | Behavior | Semantics |
 |---|---|
 | Drift | Patch-only: the operator reconciles ONLY rrsets declared in RRSet resources (5m resync, skipped when nothing changed so the zone serial stays put). Records created via the API/pdnsutil are never touched. |
-| `spec.nameservers` / `spec.soa` | Seeded once at zone creation; afterwards the apex NS/SOA are ordinary records. |
+| `spec.nameservers` / `spec.soa` | Seeded once at zone creation — the SOA is ALWAYS seeded (primary = first nameserver, `hostmaster.<zone>` default; `spec.soa` customizes hostmaster/TTL), so zones never carry PowerDNS's `a.misconfigured...` placeholder. Afterwards the apex NS/SOA are ordinary records. |
 | Deletion | `kubectl delete zone/rrset` removes the data from PowerDNS. Set `deletionPolicy: Orphan` to detach instead. |
 | Renames | `spec.name`/`spec.type`/refs are immutable — delete and recreate the resource. |
 | Conflicts | Two RRSets claiming the same (zone, name, type) BOTH go `Ready=False reason=Conflict`; neither is applied until one is deleted. |
