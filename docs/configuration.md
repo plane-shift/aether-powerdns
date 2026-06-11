@@ -231,3 +231,137 @@ have confirmed every API consumer is in an allowlisted namespace.
 | `configHash` | sha256 prefix over pdns.conf + secrets. Change → rolling restart. |
 | `conditions` | Standard k8s conditions: `Ready`, `BackendProvisioned`, `SchemaApplied`, `Available`. |
 | `failureMessage` | Set when `phase=Failed`. |
+
+## PodDisruptionBudget
+
+Both `PowerDNSServer` and `DNSDist` create a `PodDisruptionBudget` when
+`replicas > 1`. The default `minAvailable` is `replicas - 1`; override it
+via `spec.podDisruptionBudget.minAvailable`.
+
+Rules enforced at admission (CEL):
+- `minAvailable` must be **at least 1** and **strictly less than replicas**
+  (`minAvailable == replicas` would block all voluntary disruptions).
+- No PDB is rendered when `replicas` is 1 — a 1-replica PDB would
+  block node drains entirely.
+
+```yaml
+# On a PowerDNSServer or DNSDist with replicas: 3
+podDisruptionBudget:
+  minAvailable: 2   # allow at most one voluntary disruption at a time
+```
+
+## DNS readiness probe
+
+`PowerDNSServer` pods use an `exec` readiness probe running
+`pdns_control rping` instead of a plain TCP check. This confirms that
+PowerDNS's control socket is live and answering, not just that the port
+is open. Liveness stays TCP (avoids wedging a pod that is reachable but
+not fully initialized).
+
+## DNSDist
+
+`DNSDist` (short name `ddist`) deploys a [dnsdist](https://dnsdist.org)
+frontend tier: an active-health-checked DNS load balancer with packet
+cache, per-client rate limiting, and optional DoT/DoH listeners.
+
+### When to use it
+
+Run a `DNSDist` in front of your `PowerDNSServer` when you want:
+- **Active health checks** — dnsdist stops sending queries to a backend
+  that fails its health check; traffic automatically fails over to the
+  remaining replicas.
+- **Packet cache** — reduces backend load and query latency for repeated
+  lookups.
+- **Per-client rate limiting** — blocks abusive clients at the DNS layer
+  before queries reach PowerDNS.
+- **DoT / DoH termination** — dnsdist handles TLS so PowerDNS doesn't
+  have to (v1: ports exposed on the Service only, not via gateway routes).
+
+### Topology rule
+
+When a `DNSDist` is in use, **the gateway/LB exposure moves to the
+`DNSDist`**; the backing `PowerDNSServer` resources run
+`dns.exposure: none`:
+
+```yaml
+# PowerDNSServer — ClusterIP-only, not directly reachable from outside
+spec:
+  dns:
+    exposure: none
+
+# DNSDist — public face; gateway/LB routes point here
+spec:
+  dns:
+    exposure: gateway   # or loadBalancer
+    gateway:
+      parentRefs:
+        - name: eg
+          namespace: envoy-gateway-system
+          tcpSectionName: dns-tcp
+          udpSectionName: dns-udp
+```
+
+### Field reference
+
+| Field | Default | Notes |
+|---|---|---|
+| `replicas` | `1` | dnsdist Deployment replicas. |
+| `image` | `powerdns/dnsdist-19` | Floating tag — pin a digest for reproducibility. |
+| `resources` | _(none)_ | Standard `corev1.ResourceRequirements`. |
+| `scheduling` | _(none)_ | Same fields as `PowerDNSServer.spec.scheduling`. |
+| `backendRefs[].name` | _(required)_ | Name of a `PowerDNSServer` in the same namespace. At least one entry required. Duplicate names are rejected. |
+| `dns` | _(none)_ | Identical semantics to `PowerDNSServer.spec.dns` — `none`/`loadBalancer`/`gateway`. `additionalServices` works here too. |
+| `cache.enabled` | `true` | Toggle the dnsdist packet cache. |
+| `cache.maxEntries` | `100000` | Maximum cached entries. Minimum 1024. |
+| `rateLimit.qpsPerClient` | `0` (off) | Queries-per-second threshold per source IP. Excess queries are dropped. `0` disables rate limiting. |
+| `tls.dot.enabled` | `false` | DNS-over-TLS listener on port 853. Requires `tls.dot.certificateSecretRef`. |
+| `tls.doh.enabled` | `false` | DNS-over-HTTPS listener on port 443 at `/dns-query`. Requires `tls.doh.certificateSecretRef`. |
+| `tls.*.certificateSecretRef.name` | _(none)_ | Name of a `kubernetes.io/tls` Secret (e.g. cert-manager issued) in the same namespace. |
+| `podDisruptionBudget.minAvailable` | `replicas - 1` | See [PodDisruptionBudget](#poddisruptionbudget). |
+
+### `backendRefs`
+
+Each entry must name a `PowerDNSServer` in the same namespace — cross-
+namespace backend references are not supported in v1. Duplicate `name`
+values are rejected at reconcile time. The operator resolves each ref to
+the server's DNS Service FQDN and its port 53 at reconcile time (service-
+level backend addressing, not per-pod).
+
+```yaml
+backendRefs:
+  - name: pdns-primary    # PowerDNSServer in the same namespace
+  - name: pdns-replica
+```
+
+### Full example
+
+See [`examples/dnsdist-frontend.yaml`](../examples/dnsdist-frontend.yaml)
+for a complete two-document manifest (PowerDNSServer + DNSDist with cache,
+rate limiting, and gateway exposure).
+
+### v1 limitations
+
+- **Same-namespace backends only.** Cross-namespace `backendRefs` are not
+  supported; the `namespace` field on each ref must be empty.
+- **Service-level backend addressing.** Backends are addressed by their
+  ClusterIP Service FQDN (one address per `PowerDNSServer`), not per-pod.
+  Per-pod discovery is deferred to a future release.
+- **DoT/DoH ports on the Service only.** When `tls.dot` or `tls.doh` is
+  enabled the ports (853/443) are added to the dnsdist ClusterIP Service,
+  but they are NOT exposed via gateway routes (TCPRoute/UDPRoute).
+  Route-based DoT/DoH exposure requires dedicated Gateway listeners and is
+  deferred.
+- **Client IPs appear as dnsdist pod IPs.** dnsdist forwards queries to
+  the PowerDNS backends using its own pod IP as the source address.
+  Proxy-protocol support (which would preserve the original client IP at
+  the PowerDNS layer) is deliberately deferred to v2.
+
+### Status fields
+
+| Field | Meaning |
+|---|---|
+| `phase` | `Pending`, `Ready`, or `Failed`. Informational — the reconciler is single-pass, not a phase machine. |
+| `readyReplicas` / `desiredReplicas` | Mirrored from the Deployment. |
+| `dnsEndpoint` | External DNS address derived from live Service/exposure state. |
+| `conditions` | `Ready`, `BackendsReady`, `Available`. |
+| `failureMessage` | Set when phase is `Failed`. |

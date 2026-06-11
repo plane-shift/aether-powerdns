@@ -1,0 +1,42 @@
+# dnsdist frontend tier over a PowerDNSServer: gateway routes point at
+# DNSDIST (which health-checks and load-balances the pdns backends); the
+# server itself runs ClusterIP-only. Prereq: a Gateway with dns-tcp/dns-udp
+# listeners (see api-via-gateway.yaml's prereq notes).
+apiVersion: dns.aetherplatform.cloud/v1alpha1
+kind: PowerDNSServer
+metadata:
+  name: demo
+  namespace: aether-system
+spec:
+  replicas: 2
+  backend:
+    type: postgres
+    postgres:
+      instances: 1
+      storageSize: 5Gi
+  dns:
+    exposure: none          # dnsdist is the public face
+---
+apiVersion: dns.aetherplatform.cloud/v1alpha1
+kind: DNSDist
+metadata:
+  name: demo-edge
+  namespace: aether-system
+spec:
+  replicas: 2
+  backendRefs:
+    - name: demo
+  cache:
+    enabled: true
+  rateLimit:
+    qpsPerClient: 100
+  podDisruptionBudget:
+    minAvailable: 1
+  dns:
+    exposure: gateway
+    gateway:
+      parentRefs:
+        - name: eg
+          namespace: envoy-gateway-system
+          tcpSectionName: dns-tcp
+          udpSectionName: dns-udp
