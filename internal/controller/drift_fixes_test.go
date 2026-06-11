@@ -303,7 +303,7 @@ func TestUpdateConfigMapConvergesData(t *testing.T) {
 		t.Fatal(err)
 	}
 	cm := &corev1.ConfigMap{}
-	if err := c.Get(ctx, types.NamespacedName{Name: "test-config", Namespace: "default"}, cm); err != nil {
+	if err := c.Get(ctx, types.NamespacedName{Name: manifests.NameSet(s).ConfigMap, Namespace: "default"}, cm); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(cm.Data["pdns.conf"], "9090") {
@@ -328,7 +328,7 @@ func TestRefreshDNSEndpointTracksLBAssignment(t *testing.T) {
 	s.Status.Phase = dnsv1alpha1.PhaseReady
 	s.Status.DNSEndpoint = "10.1.0.241:53" // stale claim from ExposingDNS
 	svc := &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{Name: "test-dns", Namespace: "default"},
+		ObjectMeta: metav1.ObjectMeta{Name: manifests.NameSet(s).DNSService, Namespace: "default"},
 		Spec:       corev1.ServiceSpec{Type: corev1.ServiceTypeLoadBalancer},
 	}
 	c := fake.NewClientBuilder().WithScheme(scheme).
@@ -351,7 +351,7 @@ func TestRefreshDNSEndpointTracksLBAssignment(t *testing.T) {
 	}
 
 	// Address assigned: endpoint comes back.
-	if err := c.Get(ctx, types.NamespacedName{Name: "test-dns", Namespace: "default"}, svc); err != nil {
+	if err := c.Get(ctx, types.NamespacedName{Name: manifests.NameSet(s).DNSService, Namespace: "default"}, svc); err != nil {
 		t.Fatal(err)
 	}
 	svc.Status.LoadBalancer.Ingress = []corev1.LoadBalancerIngress{{IP: "10.1.0.241"}}
