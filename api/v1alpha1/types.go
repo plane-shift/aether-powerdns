@@ -420,7 +420,9 @@ type APIGatewaySpec struct {
 }
 
 // APIGatewayParentRef is a Gateway API ParentReference for the API
-// HTTPRoute (single sectionName — HTTP has one protocol).
+// HTTPRoute. Unlike GatewayParentRef, a single sectionName suffices —
+// the HTTPRoute attaches to one listener, while the DNS routes need
+// separate TCP and UDP listeners.
 type APIGatewayParentRef struct {
 	// Group of the parent. Defaults to gateway.networking.k8s.io.
 	// +optional
