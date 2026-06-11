@@ -130,3 +130,43 @@ func TestPDNSConfigSetsDefaultSOAContent(t *testing.T) {
 		t.Errorf("pdns.conf missing sane default-soa-content:\n%s", conf)
 	}
 }
+
+func TestPDBMinAvailableOverride(t *testing.T) {
+	s := testServer()
+	three := int32(3)
+	s.Spec.Replicas = &three
+
+	pdb := PodDisruptionBudget(s)
+	if pdb == nil || pdb.Spec.MinAvailable.IntValue() != 2 {
+		t.Fatalf("default must stay replicas-1, got %v", pdb)
+	}
+
+	one := int32(1)
+	s.Spec.PodDisruptionBudget = &dnsv1alpha1.PDBSpec{MinAvailable: &one}
+	pdb = PodDisruptionBudget(s)
+	if pdb.Spec.MinAvailable.IntValue() != 1 {
+		t.Errorf("override minAvailable=1 not honored, got %v", pdb.Spec.MinAvailable)
+	}
+
+	single := int32(1)
+	s.Spec.Replicas = &single
+	if PodDisruptionBudget(s) != nil {
+		t.Error("replicas<=1 must render no PDB even with an override set")
+	}
+}
+
+func TestDeploymentReadinessProbeIsDNSCheck(t *testing.T) {
+	dep := Deployment(testServer(), "h")
+	rp := dep.Spec.Template.Spec.Containers[0].ReadinessProbe
+	if rp == nil || rp.Exec == nil {
+		t.Fatalf("readiness must be an exec DNS check, got %+v", rp)
+	}
+	joined := strings.Join(rp.Exec.Command, " ")
+	if !strings.Contains(joined, "pdns_control") && !strings.Contains(joined, "sdig") {
+		t.Errorf("readiness command should use in-image DNS tooling, got %q", joined)
+	}
+	lp := dep.Spec.Template.Spec.Containers[0].LivenessProbe
+	if lp == nil || lp.TCPSocket == nil {
+		t.Errorf("liveness stays TCP, got %+v", lp)
+	}
+}

@@ -171,6 +171,15 @@ func validateSpec(s *dnsv1alpha1.PowerDNSServer) string {
 			}
 		}
 	}
+	if pdb := s.Spec.PodDisruptionBudget; pdb != nil && pdb.MinAvailable != nil {
+		replicas := int32(1)
+		if s.Spec.Replicas != nil {
+			replicas = *s.Spec.Replicas
+		}
+		if replicas > 1 && *pdb.MinAvailable >= replicas {
+			return fmt.Sprintf("podDisruptionBudget.minAvailable (%d) must be < replicas (%d) — equal would block all drains", *pdb.MinAvailable, replicas)
+		}
+	}
 	if s.Spec.DNS.Exposure == dnsv1alpha1.DNSExposureLoadBalancer &&
 		s.Spec.DNS.LoadBalancer != nil {
 		seen := map[string]struct{}{}

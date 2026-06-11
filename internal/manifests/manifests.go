@@ -320,7 +320,12 @@ func Deployment(s *dnsv1alpha1.PowerDNSServer, configHash string) *appsv1.Deploy
 				},
 				ReadinessProbe: &corev1.Probe{
 					ProbeHandler: corev1.ProbeHandler{
-						TCPSocket: &corev1.TCPSocketAction{Port: intstr.FromInt(int(api.Port))},
+						// Real DNS-engine responsiveness, not just an open
+						// socket: an up-but-wedged pdns drops from
+						// endpoints (HA hardening; command verified live).
+						Exec: &corev1.ExecAction{
+							Command: []string{"pdns_control", "--socket-dir=/var/run", "rping"},
+						},
 					},
 					InitialDelaySeconds: 5,
 					PeriodSeconds:       5,
@@ -409,6 +414,28 @@ func Deployment(s *dnsv1alpha1.PowerDNSServer, configHash string) *appsv1.Deploy
 	}
 }
 
+// pdbFor renders a PodDisruptionBudget for any operator-managed workload.
+// nil when replicas <= 1 (a single-replica PDB would block every drain).
+// Default minAvailable is replicas-1; the override is clamped into
+// [1, replicas-1] by validateSpec before it gets here.
+func pdbFor(name, namespace string, lbls map[string]string, replicas int32, override *int32) *policyv1.PodDisruptionBudget {
+	if replicas <= 1 {
+		return nil
+	}
+	min := replicas - 1
+	if override != nil {
+		min = *override
+	}
+	minAvail := intstr.FromInt(int(min))
+	return &policyv1.PodDisruptionBudget{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace, Labels: lbls},
+		Spec: policyv1.PodDisruptionBudgetSpec{
+			MinAvailable: &minAvail,
+			Selector:     &metav1.LabelSelector{MatchLabels: lbls},
+		},
+	}
+}
+
 // PodDisruptionBudget keeps `replicas - 1` pods available during voluntary
 // disruptions when running HA. Returns nil when replicas <= 1 — a single
 // replica + PDB would block node drains entirely.
@@ -417,22 +444,11 @@ func PodDisruptionBudget(s *dnsv1alpha1.PowerDNSServer) *policyv1.PodDisruptionB
 	if s.Spec.Replicas != nil {
 		replicas = *s.Spec.Replicas
 	}
-	if replicas <= 1 {
-		return nil
+	var override *int32
+	if s.Spec.PodDisruptionBudget != nil {
+		override = s.Spec.PodDisruptionBudget.MinAvailable
 	}
-	names := NameSet(s)
-	minAvail := intstr.FromInt(int(replicas - 1))
-	return &policyv1.PodDisruptionBudget{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      names.PDB,
-			Namespace: s.Namespace,
-			Labels:    labels(s),
-		},
-		Spec: policyv1.PodDisruptionBudgetSpec{
-			MinAvailable: &minAvail,
-			Selector:     &metav1.LabelSelector{MatchLabels: labels(s)},
-		},
-	}
+	return pdbFor(NameSet(s).PDB, s.Namespace, labels(s), replicas, override)
 }
 
 // APIService exposes the PowerDNS HTTP API on ClusterIP only. The API is an
