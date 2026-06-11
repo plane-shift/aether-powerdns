@@ -14,6 +14,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	policyv1 "k8s.io/api/policy/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -21,6 +22,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -218,6 +220,18 @@ func (r *PowerDNSServerReconciler) phaseProvisioningBackend(ctx context.Context,
 		return ctrl.Result{RequeueAfter: requeueShort}, nil
 	}
 
+	// The `<cluster>-app` Secret appears well before the instance accepts
+	// connections — advancing on the Secret alone lets the schema Job burn
+	// its whole backoff against a database that isn't up yet (issue #11).
+	dbReady, err := r.cnpgClusterReady(ctx, s, names.CNPGCluster)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if !dbReady {
+		logger.Info("CNPG instance not ready yet, holding before schema init")
+		return ctrl.Result{RequeueAfter: requeueShort}, nil
+	}
+
 	s.Status.BackendSecretName = names.BackendSecret
 	trueCond(s, dnsv1alpha1.ConditionBackendProvisioned, "BackendReady", "Backend secret published")
 	r.event(s, corev1.EventTypeNormal, "BackendProvisioned", "Postgres backend ready, applying schema")
@@ -250,11 +264,46 @@ func (r *PowerDNSServerReconciler) phaseInitializingSchema(ctx context.Context, 
 		r.event(s, corev1.EventTypeNormal, "SchemaApplied", "PowerDNS schema initialised")
 		return r.setPhase(ctx, s, dnsv1alpha1.PhaseDeployingServer)
 	}
-	if job.Status.Failed >= 6 {
-		return r.setFailed(ctx, s, "schema init Job exhausted retries; check Job logs")
+	for _, c := range job.Status.Conditions {
+		if c.Type == batchv1.JobFailed && c.Status == corev1.ConditionTrue {
+			// A backoff-exhausted Job never retries on its own; with
+			// RestartPolicy=OnFailure the Failed counter is unreliable, so
+			// detect via the JobFailed condition. Replace the Job and let
+			// the NotFound branch above recreate it — paced by requeueLong
+			// and visible via the event, instead of wedging the phase
+			// machine forever (issue #11).
+			r.event(s, corev1.EventTypeWarning, "SchemaJobRetried",
+				"schema init Job failed ("+c.Reason+"); recreating: "+c.Message)
+			policy := metav1.DeletePropagationBackground
+			if err := r.Delete(ctx, job, &client.DeleteOptions{PropagationPolicy: &policy}); err != nil && !apierrors.IsNotFound(err) {
+				return ctrl.Result{}, fmt.Errorf("delete failed schema job: %w", err)
+			}
+			return ctrl.Result{RequeueAfter: requeueLong}, nil
+		}
 	}
 	logger.Info("waiting for schema init Job", "succeeded", job.Status.Succeeded, "failed", job.Status.Failed)
 	return ctrl.Result{RequeueAfter: requeueShort}, nil
+}
+
+// cnpgClusterReady reports whether the managed CNPG Cluster has at least
+// one ready instance, read from the unstructured status (we deliberately
+// don't import CNPG's Go types).
+func (r *PowerDNSServerReconciler) cnpgClusterReady(ctx context.Context, s *dnsv1alpha1.PowerDNSServer, name string) (bool, error) {
+	u := &unstructured.Unstructured{}
+	u.SetGroupVersionKind(cnpg.GVK)
+	if err := r.Get(ctx, types.NamespacedName{Name: name, Namespace: s.Namespace}, u); err != nil {
+		return false, client.IgnoreNotFound(err)
+	}
+	ready, found, err := unstructured.NestedInt64(u.Object, "status", "readyInstances")
+	if err != nil {
+		// Don't swallow a coercion error: silently holding "not ready"
+		// forever is the same wedge class this gate exists to prevent.
+		return false, fmt.Errorf("read CNPG cluster readyInstances: %w", err)
+	}
+	if !found {
+		return false, nil
+	}
+	return ready >= 1, nil
 }
 
 func (r *PowerDNSServerReconciler) phaseDeployingServer(ctx context.Context, s *dnsv1alpha1.PowerDNSServer) (ctrl.Result, error) {
@@ -895,26 +944,70 @@ func (r *PowerDNSServerReconciler) updateDeployment(ctx context.Context, _ *dnsv
 	return r.Update(ctx, existing)
 }
 
+// updateService converges a Service without churning it (issue #13):
+// apiserver-assigned NodePorts and foreign annotations (LB controllers
+// like MetalLB annotate the Service too — wholesale replacement
+// ping-pongs with them forever) are preserved, a steady-state no-op
+// skips the write entirely, and genuine updates retry on
+// optimistic-concurrency conflicts instead of failing the drift pass.
+// Trade-off of the annotation merge: removing an annotation from the
+// spec no longer removes it from the live Service.
 func (r *PowerDNSServerReconciler) updateService(ctx context.Context, desired *corev1.Service) error {
-	existing := &corev1.Service{}
-	err := r.Get(ctx, types.NamespacedName{Name: desired.Name, Namespace: desired.Namespace}, existing)
-	if apierrors.IsNotFound(err) {
-		return r.Create(ctx, desired)
+	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		existing := &corev1.Service{}
+		err := r.Get(ctx, types.NamespacedName{Name: desired.Name, Namespace: desired.Namespace}, existing)
+		if apierrors.IsNotFound(err) {
+			return r.Create(ctx, desired)
+		}
+		if err != nil {
+			return err
+		}
+
+		// Start from the live object so immutable/foreign fields
+		// (ClusterIP, ipFamilies, controller-added metadata) survive.
+		updated := existing.DeepCopy()
+		updated.Spec.Ports = make([]corev1.ServicePort, len(desired.Spec.Ports))
+		copy(updated.Spec.Ports, desired.Spec.Ports)
+		if desired.Spec.Type == corev1.ServiceTypeLoadBalancer || desired.Spec.Type == corev1.ServiceTypeNodePort {
+			// Keep assigned NodePorts so steady state compares equal.
+			for i := range updated.Spec.Ports {
+				if updated.Spec.Ports[i].NodePort != 0 {
+					continue
+				}
+				for _, ep := range existing.Spec.Ports {
+					if servicePortsMatch(ep, updated.Spec.Ports[i]) {
+						updated.Spec.Ports[i].NodePort = ep.NodePort
+						break
+					}
+				}
+			}
+		}
+		updated.Spec.Type = desired.Spec.Type
+		updated.Spec.Selector = desired.Spec.Selector
+		updated.Spec.LoadBalancerIP = desired.Spec.LoadBalancerIP
+		updated.Spec.ExternalTrafficPolicy = desired.Spec.ExternalTrafficPolicy
+		for k, v := range desired.Annotations {
+			if updated.Annotations == nil {
+				updated.Annotations = map[string]string{}
+			}
+			updated.Annotations[k] = v
+		}
+
+		if equality.Semantic.DeepEqual(existing.Spec, updated.Spec) &&
+			equality.Semantic.DeepEqual(existing.Annotations, updated.Annotations) {
+			return nil
+		}
+		return r.Update(ctx, updated)
+	})
+}
+
+// servicePortsMatch pairs ports by name when named, by port+protocol
+// otherwise — for carrying assigned NodePorts across re-renders.
+func servicePortsMatch(a, b corev1.ServicePort) bool {
+	if a.Name != "" || b.Name != "" {
+		return a.Name == b.Name
 	}
-	if err != nil {
-		return err
-	}
-	// Preserve ClusterIP — it's immutable after creation.
-	desired.Spec.ClusterIP = existing.Spec.ClusterIP
-	existing.Spec.Ports = desired.Spec.Ports
-	existing.Spec.Type = desired.Spec.Type
-	existing.Spec.Selector = desired.Spec.Selector
-	existing.Spec.LoadBalancerIP = desired.Spec.LoadBalancerIP
-	existing.Spec.ExternalTrafficPolicy = desired.Spec.ExternalTrafficPolicy
-	if desired.Annotations != nil {
-		existing.Annotations = desired.Annotations
-	}
-	return r.Update(ctx, existing)
+	return a.Port == b.Port && a.Protocol == b.Protocol
 }
 
 func (r *PowerDNSServerReconciler) setPhase(ctx context.Context, s *dnsv1alpha1.PowerDNSServer, phase string) (ctrl.Result, error) {
