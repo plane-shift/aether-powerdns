@@ -82,11 +82,11 @@ func DNSDistConfig(d *dnsv1alpha1.DNSDist) string {
 	}
 
 	if d.Spec.Cache.Enabled == nil || *d.Spec.Cache.Enabled {
-		max := int32(100000)
+		maxEntries := int32(100000)
 		if d.Spec.Cache.MaxEntries != nil {
-			max = *d.Spec.Cache.MaxEntries
+			maxEntries = *d.Spec.Cache.MaxEntries
 		}
-		fmt.Fprintf(&b, "pc = newPacketCache(%d, {maxTTL=86400})\n", max)
+		fmt.Fprintf(&b, "pc = newPacketCache(%d, {maxTTL=86400})\n", maxEntries)
 		b.WriteString(`getPool(""):setCache(pc)` + "\n")
 	}
 

@@ -257,7 +257,7 @@ podDisruptionBudget:
 ## DNS readiness probe
 
 `PowerDNSServer` pods use an `exec` readiness probe running
-`pdns_control rping` instead of a plain TCP check. This confirms that
+`pdns_control --socket-dir=/var/run rping` instead of a plain TCP check. This confirms that
 PowerDNS's control socket is live and answering, not just that the port
 is open. Liveness stays TCP (avoids wedging a pod that is reachable but
 not fully initialized).

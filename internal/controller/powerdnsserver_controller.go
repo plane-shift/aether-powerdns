@@ -660,10 +660,10 @@ func (r *PowerDNSServerReconciler) reconcileDrift(ctx context.Context, s *dnsv1a
 	if err := r.updateDeployment(ctx, s, manifests.Deployment(s, hash)); err != nil {
 		return err
 	}
-	if err := r.updateService(ctx, manifests.APIService(s)); err != nil {
+	if err := r.updateService(ctx, s, manifests.APIService(s)); err != nil {
 		return err
 	}
-	if err := r.updateService(ctx, manifests.DNSService(s)); err != nil {
+	if err := r.updateService(ctx, s, manifests.DNSService(s)); err != nil {
 		return err
 	}
 	if err := r.reconcileAdditionalDNSServices(ctx, s); err != nil {

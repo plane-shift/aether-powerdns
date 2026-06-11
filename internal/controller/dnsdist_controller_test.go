@@ -239,6 +239,66 @@ func TestDNSDistAdditionalServicesReconcile(t *testing.T) {
 	}
 }
 
+// TestDNSDistTLSSecretRotationRollsDeployment verifies that updating the data
+// of a referenced TLS Secret (in-place cert rotation) changes the
+// config-hash annotation on the Deployment pod template — which triggers a
+// rolling restart so the new certificate is loaded.
+func TestDNSDistTLSSecretRotationRollsDeployment(t *testing.T) {
+	ctx := context.Background()
+
+	dotSecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "dot-cert", Namespace: "default"},
+		Data: map[string][]byte{
+			"tls.crt": []byte("cert-v1"),
+			"tls.key": []byte("key-v1"),
+		},
+	}
+
+	d := edgeDNSDist()
+	d.Spec.TLS = dnsv1alpha1.DNSDistTLSSpec{
+		DoT: dnsv1alpha1.DNSDistTLSListener{
+			Enabled:              true,
+			CertificateSecretRef: corev1.LocalObjectReference{Name: "dot-cert"},
+		},
+	}
+
+	r, c := newDNSDistReconciler(t, d, readyBackend("srv-a"), dotSecret)
+	key := types.NamespacedName{Name: "edge", Namespace: "default"}
+
+	reconcileDNSDistN(t, r, key, 2)
+
+	dep := &appsv1.Deployment{}
+	if err := c.Get(ctx, types.NamespacedName{Name: "edge-dnsdist", Namespace: "default"}, dep); err != nil {
+		t.Fatalf("deployment: %v", err)
+	}
+	hashBefore := dep.Spec.Template.Annotations[manifests.ConfigHashAnnotation]
+	if hashBefore == "" {
+		t.Fatal("config-hash annotation must be set after initial reconcile")
+	}
+
+	// Rotate the certificate data in-place.
+	sec := &corev1.Secret{}
+	if err := c.Get(ctx, types.NamespacedName{Name: "dot-cert", Namespace: "default"}, sec); err != nil {
+		t.Fatal(err)
+	}
+	sec.Data["tls.crt"] = []byte("cert-v2")
+	sec.Data["tls.key"] = []byte("key-v2")
+	if err := c.Update(ctx, sec); err != nil {
+		t.Fatal(err)
+	}
+
+	reconcileDNSDistN(t, r, key, 2)
+
+	dep2 := &appsv1.Deployment{}
+	if err := c.Get(ctx, types.NamespacedName{Name: "edge-dnsdist", Namespace: "default"}, dep2); err != nil {
+		t.Fatalf("deployment after rotation: %v", err)
+	}
+	hashAfter := dep2.Spec.Template.Annotations[manifests.ConfigHashAnnotation]
+	if hashAfter == hashBefore {
+		t.Errorf("config-hash annotation must change when the TLS Secret data is updated (cert rotation must roll pods); before=%q after=%q", hashBefore, hashAfter)
+	}
+}
+
 func TestDNSDistConfChangeUpdatesConfigMap(t *testing.T) {
 	r, c := newDNSDistReconciler(t, edgeDNSDist(), readyBackend("srv-a"), readyBackend("srv-b"))
 	key := types.NamespacedName{Name: "edge", Namespace: "default"}

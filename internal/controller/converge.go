@@ -15,7 +15,10 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/util/retry"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	dnsv1alpha1 "github.com/plane-shift/aether-powerdns/api/v1alpha1"
 )
 
 // updateService converges a Service without churning it (issue #13):
@@ -130,7 +133,12 @@ func updateConfigMap(ctx context.Context, c client.Client, desired *corev1.Confi
 // These keep existing call sites within powerdnsserver_controller.go
 // unchanged (they call r.updateService, r.deleteIfExists, etc.).
 
-func (r *PowerDNSServerReconciler) updateService(ctx context.Context, desired *corev1.Service) error {
+func (r *PowerDNSServerReconciler) updateService(ctx context.Context, s *dnsv1alpha1.PowerDNSServer, desired *corev1.Service) error {
+	// Set owner ref before entering the converge loop so the NotFound→Create
+	// path creates the Service with a controller ref (GC safety on recreate).
+	if err := ctrl.SetControllerReference(s, desired, r.Scheme); err != nil {
+		return err
+	}
 	return updateService(ctx, r.Client, desired)
 }
 

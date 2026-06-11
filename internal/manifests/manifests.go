@@ -423,11 +423,11 @@ func pdbFor(name, namespace string, lbls map[string]string, replicas int32, over
 	if replicas <= 1 {
 		return nil
 	}
-	min := replicas - 1
+	minAvailable := replicas - 1
 	if override != nil {
-		min = *override
+		minAvailable = *override
 	}
-	minAvail := intstr.FromInt(int(min))
+	minAvail := intstr.FromInt(int(minAvailable))
 	return &policyv1.PodDisruptionBudget{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace, Labels: lbls},
 		Spec: policyv1.PodDisruptionBudgetSpec{

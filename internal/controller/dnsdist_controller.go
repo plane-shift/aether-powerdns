@@ -2,8 +2,6 @@ package controller
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"strings"
 	"time"
@@ -80,9 +78,35 @@ func (r *DNSDistReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, fmt.Errorf("ensure configmap: %w", err)
 	}
 
-	hash := sha256.Sum256([]byte(cm.Data["dnsdist.conf"] +
-		d.Spec.TLS.DoT.CertificateSecretRef.Name + d.Spec.TLS.DoH.CertificateSecretRef.Name))
-	dep := manifests.DNSDistDeployment(d, hex.EncodeToString(hash[:16]))
+	// Build config hash: conf string first, then TLS secret data for each
+	// enabled DoT/DoH listener so in-place cert rotation rolls the pods.
+	// Mirrors computeConfigHash's deterministic data-folding approach
+	// (sorted keys, null-delimited) without requiring a separate method.
+	tlsSecretMaps := make([]map[string][]byte, 0, 2)
+	for _, tlsCfg := range []struct {
+		enabled bool
+		name    string
+	}{
+		{d.Spec.TLS.DoT.Enabled, d.Spec.TLS.DoT.CertificateSecretRef.Name},
+		{d.Spec.TLS.DoH.Enabled, d.Spec.TLS.DoH.CertificateSecretRef.Name},
+	} {
+		if !tlsCfg.enabled {
+			continue
+		}
+		sec := &corev1.Secret{}
+		err := r.Get(ctx, types.NamespacedName{Name: tlsCfg.name, Namespace: d.Namespace}, sec)
+		if apierrors.IsNotFound(err) {
+			// Secret not yet present; fold just the name so the hash is stable
+			// but distinct once the Secret appears. Pods can't mount it anyway.
+			tlsSecretMaps = append(tlsSecretMaps, map[string][]byte{"__name__": []byte(tlsCfg.name)})
+		} else if err != nil {
+			return ctrl.Result{}, fmt.Errorf("get tls secret %s: %w", tlsCfg.name, err)
+		} else {
+			tlsSecretMaps = append(tlsSecretMaps, sec.Data)
+		}
+	}
+	hashStr := manifests.ConfigHash(cm.Data["dnsdist.conf"], tlsSecretMaps...)
+	dep := manifests.DNSDistDeployment(d, hashStr)
 	if err := upsertOwned(ctx, r.Client, r.Scheme, d, &appsv1.Deployment{}, dep.Name, dep.Namespace, func(live *appsv1.Deployment) {
 		live.Labels = dep.Labels
 		live.Spec = dep.Spec

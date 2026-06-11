@@ -73,6 +73,11 @@ spec:
                   type: array
                   minItems: 1
                   maxItems: 16
+                  x-kubernetes-validations:
+                    - rule: "self.all(ref, !has(ref.namespace) || ref.namespace == '')"
+                      message: "backendRefs must be same-namespace; backendRefs[].namespace must be empty"
+                    - rule: "self.all(ref, self.exists_one(other, other.name == ref.name))"
+                      message: "backendRefs must not contain duplicate names"
                   items:
                     type: object
                     required: [name]
