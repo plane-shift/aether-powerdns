@@ -6,12 +6,15 @@ import (
 	"testing"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 	gatewayv1alpha2 "sigs.k8s.io/gateway-api/apis/v1alpha2"
 
@@ -183,5 +186,76 @@ func TestValidateSpecAPIGateway(t *testing.T) {
 	s.Spec.API.Gateway.ParentRefs = []dnsv1alpha1.APIGatewayParentRef{{Name: "eg"}}
 	if msg := validateSpec(s); msg != "" {
 		t.Errorf("valid api.gateway rejected: %q", msg)
+	}
+}
+
+// noMatchInterceptor simulates a cluster without the Gateway API route
+// CRDs: every Get/Create on a route type fails with NoKindMatchError,
+// exactly like a real apiserver without the experimental channel.
+func noMatchInterceptor() interceptor.Funcs {
+	noMatch := func(obj client.Object) error {
+		switch obj.(type) {
+		case *gatewayv1alpha2.TCPRoute:
+			return &meta.NoKindMatchError{GroupKind: schema.GroupKind{Group: "gateway.networking.k8s.io", Kind: "TCPRoute"}, SearchedVersions: []string{"v1alpha2"}}
+		case *gatewayv1alpha2.UDPRoute:
+			return &meta.NoKindMatchError{GroupKind: schema.GroupKind{Group: "gateway.networking.k8s.io", Kind: "UDPRoute"}, SearchedVersions: []string{"v1alpha2"}}
+		case *gatewayv1.HTTPRoute:
+			return &meta.NoKindMatchError{GroupKind: schema.GroupKind{Group: "gateway.networking.k8s.io", Kind: "HTTPRoute"}, SearchedVersions: []string{"v1"}}
+		}
+		return nil
+	}
+	return interceptor.Funcs{
+		Get: func(ctx context.Context, cl client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+			if err := noMatch(obj); err != nil {
+				return err
+			}
+			return cl.Get(ctx, key, obj, opts...)
+		},
+		Create: func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+			if err := noMatch(obj); err != nil {
+				return err
+			}
+			return cl.Create(ctx, obj, opts...)
+		},
+	}
+}
+
+func TestReconcileRoutesToleratesMissingCRDsWhenUnused(t *testing.T) {
+	// A loadBalancer server with no gateway use at all must keep a clean
+	// drift loop on clusters without the route CRDs (the v0.2.0 regression:
+	// the delete-path Get returned a no-match error and broke reconcileDrift
+	// for every server).
+	s := gatewayExposedServer()
+	s.Spec.DNS.Exposure = dnsv1alpha1.DNSExposureLoadBalancer
+	s.Spec.DNS.Gateway = nil
+	s.Spec.API.Gateway = nil
+
+	scheme := routesTestScheme(t)
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(s).
+		WithInterceptorFuncs(noMatchInterceptor()).Build()
+	r := &PowerDNSServerReconciler{Client: c, Scheme: scheme}
+
+	for i := 0; i < 3; i++ {
+		if err := r.reconcileRoutes(context.Background(), s); err != nil {
+			t.Fatalf("pass %d: missing CRDs must not fail unused-route reconciliation: %v", i+1, err)
+		}
+	}
+}
+
+func TestReconcileRoutesSurfacesMissingCRDOnEnsure(t *testing.T) {
+	// When the user explicitly asked for gateway exposure, a missing CRD is
+	// a real problem — the error must say so instead of a bare no-match.
+	s := gatewayExposedServer()
+	scheme := routesTestScheme(t)
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(s).
+		WithInterceptorFuncs(noMatchInterceptor()).Build()
+	r := &PowerDNSServerReconciler{Client: c, Scheme: scheme}
+
+	err := r.reconcileRoutes(context.Background(), s)
+	if err == nil {
+		t.Fatal("gateway exposure with missing CRDs must error")
+	}
+	if !strings.Contains(err.Error(), "CRD not installed") {
+		t.Errorf("error should hint at the missing CRD, got: %v", err)
 	}
 }

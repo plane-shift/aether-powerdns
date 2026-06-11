@@ -425,6 +425,11 @@ func (r *PowerDNSServerReconciler) reconcileRoutes(ctx context.Context, s *dnsv1
 			tcp.Spec = desiredTCP.Spec
 			return ctrl.SetControllerReference(s, tcp, r.Scheme)
 		}); err != nil {
+			if meta.IsNoMatchError(err) {
+				r.event(s, corev1.EventTypeWarning, "GatewayCRDMissing",
+					"dns.exposure=gateway needs the Gateway API experimental channel (TCPRoute/UDPRoute CRDs not installed)")
+				return fmt.Errorf("ensure tcproute: TCPRoute CRD not installed (Gateway API experimental channel): %w", err)
+			}
 			return fmt.Errorf("ensure tcproute: %w", err)
 		}
 
@@ -435,6 +440,9 @@ func (r *PowerDNSServerReconciler) reconcileRoutes(ctx context.Context, s *dnsv1
 			udp.Spec = desiredUDP.Spec
 			return ctrl.SetControllerReference(s, udp, r.Scheme)
 		}); err != nil {
+			if meta.IsNoMatchError(err) {
+				return fmt.Errorf("ensure udproute: UDPRoute CRD not installed (Gateway API experimental channel): %w", err)
+			}
 			return fmt.Errorf("ensure udproute: %w", err)
 		}
 	} else {
@@ -458,6 +466,11 @@ func (r *PowerDNSServerReconciler) reconcileRoutes(ctx context.Context, s *dnsv1
 			return ctrl.SetControllerReference(s, http, r.Scheme)
 		})
 		if err != nil {
+			if meta.IsNoMatchError(err) {
+				r.event(s, corev1.EventTypeWarning, "GatewayCRDMissing",
+					"spec.api.gateway needs the Gateway API HTTPRoute CRD, which is not installed")
+				return fmt.Errorf("ensure httproute: HTTPRoute CRD not installed (Gateway API): %w", err)
+			}
 			return fmt.Errorf("ensure httproute: %w", err)
 		}
 		if op == controllerutil.OperationResultCreated {
@@ -477,8 +490,14 @@ func (r *PowerDNSServerReconciler) reconcileRoutes(ctx context.Context, s *dnsv1
 // deleteIfExists removes obj only when it actually exists — the common
 // (non-gateway) path would otherwise fire blind DELETEs on every Ready
 // loop. NotFound on the Get is the steady state and costs one cheap read.
+// A missing CRD (no-match) also counts as "nothing to delete": Gateway
+// API is optional, and servers that never asked for gateway exposure must
+// not fail their drift loop on clusters without the route CRDs.
 func (r *PowerDNSServerReconciler) deleteIfExists(ctx context.Context, obj client.Object) error {
 	if err := r.Get(ctx, client.ObjectKeyFromObject(obj), obj); err != nil {
+		if meta.IsNoMatchError(err) {
+			return nil
+		}
 		return client.IgnoreNotFound(err)
 	}
 	return client.IgnoreNotFound(r.Delete(ctx, obj))
