@@ -77,6 +77,7 @@ func (in *PowerDNSServerSpec) DeepCopyInto(out *PowerDNSServerSpec) {
 	in.Scheduling.DeepCopyInto(&out.Scheduling)
 	in.Observability.DeepCopyInto(&out.Observability)
 	in.NetworkPolicy.DeepCopyInto(&out.NetworkPolicy)
+	in.ZoneManagement.DeepCopyInto(&out.ZoneManagement)
 }
 
 func (in *SchedulingSpec) DeepCopyInto(out *SchedulingSpec) {
@@ -335,6 +336,250 @@ func (in *PowerDNSServerStatus) DeepCopy() *PowerDNSServerStatus {
 		return nil
 	}
 	out := new(PowerDNSServerStatus)
+	in.DeepCopyInto(out)
+	return out
+}
+
+func (in *ZoneManagementSpec) DeepCopyInto(out *ZoneManagementSpec) {
+	*out = *in
+	if in.AllowedNamespaces != nil {
+		out.AllowedNamespaces = make([]string, len(in.AllowedNamespaces))
+		copy(out.AllowedNamespaces, in.AllowedNamespaces)
+	}
+}
+
+func (in *ZoneManagementSpec) DeepCopy() *ZoneManagementSpec {
+	if in == nil {
+		return nil
+	}
+	out := new(ZoneManagementSpec)
+	in.DeepCopyInto(out)
+	return out
+}
+
+func (in *ObjectRef) DeepCopyInto(out *ObjectRef) {
+	*out = *in
+}
+
+func (in *ObjectRef) DeepCopy() *ObjectRef {
+	if in == nil {
+		return nil
+	}
+	out := new(ObjectRef)
+	in.DeepCopyInto(out)
+	return out
+}
+
+func (in *Zone) DeepCopyInto(out *Zone) {
+	*out = *in
+	out.TypeMeta = in.TypeMeta
+	in.ObjectMeta.DeepCopyInto(&out.ObjectMeta)
+	in.Spec.DeepCopyInto(&out.Spec)
+	in.Status.DeepCopyInto(&out.Status)
+}
+
+func (in *Zone) DeepCopy() *Zone {
+	if in == nil {
+		return nil
+	}
+	out := new(Zone)
+	in.DeepCopyInto(out)
+	return out
+}
+
+func (in *Zone) DeepCopyObject() runtime.Object {
+	if c := in.DeepCopy(); c != nil {
+		return c
+	}
+	return nil
+}
+
+func (in *ZoneList) DeepCopyInto(out *ZoneList) {
+	*out = *in
+	out.TypeMeta = in.TypeMeta
+	in.ListMeta.DeepCopyInto(&out.ListMeta)
+	if in.Items != nil {
+		l := make([]Zone, len(in.Items))
+		for i := range in.Items {
+			in.Items[i].DeepCopyInto(&l[i])
+		}
+		out.Items = l
+	}
+}
+
+func (in *ZoneList) DeepCopy() *ZoneList {
+	if in == nil {
+		return nil
+	}
+	out := new(ZoneList)
+	in.DeepCopyInto(out)
+	return out
+}
+
+func (in *ZoneList) DeepCopyObject() runtime.Object {
+	if c := in.DeepCopy(); c != nil {
+		return c
+	}
+	return nil
+}
+
+func (in *ZoneSpec) DeepCopyInto(out *ZoneSpec) {
+	*out = *in
+	out.ServerRef = in.ServerRef
+	if in.Masters != nil {
+		out.Masters = make([]string, len(in.Masters))
+		copy(out.Masters, in.Masters)
+	}
+	if in.Nameservers != nil {
+		out.Nameservers = make([]string, len(in.Nameservers))
+		copy(out.Nameservers, in.Nameservers)
+	}
+	if in.SOA != nil {
+		out.SOA = new(SOASpec)
+		in.SOA.DeepCopyInto(out.SOA)
+	}
+	out.DNSSEC = in.DNSSEC
+}
+
+func (in *ZoneSpec) DeepCopy() *ZoneSpec {
+	if in == nil {
+		return nil
+	}
+	out := new(ZoneSpec)
+	in.DeepCopyInto(out)
+	return out
+}
+
+func (in *SOASpec) DeepCopyInto(out *SOASpec) {
+	*out = *in
+	if in.TTL != nil {
+		v := *in.TTL
+		out.TTL = &v
+	}
+}
+
+func (in *SOASpec) DeepCopy() *SOASpec {
+	if in == nil {
+		return nil
+	}
+	out := new(SOASpec)
+	in.DeepCopyInto(out)
+	return out
+}
+
+func (in *ZoneStatus) DeepCopyInto(out *ZoneStatus) {
+	*out = *in
+	if in.DSRecords != nil {
+		out.DSRecords = make([]string, len(in.DSRecords))
+		copy(out.DSRecords, in.DSRecords)
+	}
+	if in.Conditions != nil {
+		out.Conditions = make([]v1.Condition, len(in.Conditions))
+		for i := range in.Conditions {
+			in.Conditions[i].DeepCopyInto(&out.Conditions[i])
+		}
+	}
+}
+
+func (in *ZoneStatus) DeepCopy() *ZoneStatus {
+	if in == nil {
+		return nil
+	}
+	out := new(ZoneStatus)
+	in.DeepCopyInto(out)
+	return out
+}
+
+func (in *RRSet) DeepCopyInto(out *RRSet) {
+	*out = *in
+	out.TypeMeta = in.TypeMeta
+	in.ObjectMeta.DeepCopyInto(&out.ObjectMeta)
+	in.Spec.DeepCopyInto(&out.Spec)
+	in.Status.DeepCopyInto(&out.Status)
+}
+
+func (in *RRSet) DeepCopy() *RRSet {
+	if in == nil {
+		return nil
+	}
+	out := new(RRSet)
+	in.DeepCopyInto(out)
+	return out
+}
+
+func (in *RRSet) DeepCopyObject() runtime.Object {
+	if c := in.DeepCopy(); c != nil {
+		return c
+	}
+	return nil
+}
+
+func (in *RRSetList) DeepCopyInto(out *RRSetList) {
+	*out = *in
+	out.TypeMeta = in.TypeMeta
+	in.ListMeta.DeepCopyInto(&out.ListMeta)
+	if in.Items != nil {
+		l := make([]RRSet, len(in.Items))
+		for i := range in.Items {
+			in.Items[i].DeepCopyInto(&l[i])
+		}
+		out.Items = l
+	}
+}
+
+func (in *RRSetList) DeepCopy() *RRSetList {
+	if in == nil {
+		return nil
+	}
+	out := new(RRSetList)
+	in.DeepCopyInto(out)
+	return out
+}
+
+func (in *RRSetList) DeepCopyObject() runtime.Object {
+	if c := in.DeepCopy(); c != nil {
+		return c
+	}
+	return nil
+}
+
+func (in *RRSetSpec) DeepCopyInto(out *RRSetSpec) {
+	*out = *in
+	out.ZoneRef = in.ZoneRef
+	if in.TTL != nil {
+		v := *in.TTL
+		out.TTL = &v
+	}
+	if in.Records != nil {
+		out.Records = make([]string, len(in.Records))
+		copy(out.Records, in.Records)
+	}
+}
+
+func (in *RRSetSpec) DeepCopy() *RRSetSpec {
+	if in == nil {
+		return nil
+	}
+	out := new(RRSetSpec)
+	in.DeepCopyInto(out)
+	return out
+}
+
+func (in *RRSetStatus) DeepCopyInto(out *RRSetStatus) {
+	*out = *in
+	if in.Conditions != nil {
+		out.Conditions = make([]v1.Condition, len(in.Conditions))
+		for i := range in.Conditions {
+			in.Conditions[i].DeepCopyInto(&out.Conditions[i])
+		}
+	}
+}
+
+func (in *RRSetStatus) DeepCopy() *RRSetStatus {
+	if in == nil {
+		return nil
+	}
+	out := new(RRSetStatus)
 	in.DeepCopyInto(out)
 	return out
 }

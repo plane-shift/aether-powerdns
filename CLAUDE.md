@@ -9,12 +9,13 @@ Always use Superpowers skills for this project. Begin every task by invoking
 
 ## Scope
 
-Operator that **only owns the PowerDNS server lifecycle** — provisioning,
-config, exposure, API key. It deliberately does not model zones, records or
-DNSSEC keys. Users manage those via the PowerDNS HTTP API (with the operator-
-generated key) or `pdnsutil` (`kubectl exec`). Don't add per-record CRDs
-without revisiting that decision with the user — it would explode the CRD
-surface (~50 record types) and reinvent what the PowerDNS API already does.
+Operator owns the PowerDNS server lifecycle (provisioning, config,
+exposure, API key) **plus declarative zone/record management** via two
+CRDs: `Zone` and one generic `RRSet` (the record type is a spec field).
+Do NOT add per-record-type CRDs — ~50 kinds would reinvent the PowerDNS
+API; that decision stands. Reconciliation is patch-only/coexist: only
+CR-declared rrsets are ever written, so managing records via the
+PowerDNS HTTP API or `pdnsutil` still works alongside the CRDs.
 
 ## Commands
 
@@ -60,6 +61,23 @@ and managed modes share the same downstream code path.
 PowerDNS reads gpgsql credentials via env vars: `PDNS_GPGSQL_HOST`,
 `PDNS_GPGSQL_PORT`, etc. (the `PDNS_<SETTING>` convention). We map them
 from `PG*` so the same Secret feeds both `psql` (schema Job) and PowerDNS.
+
+Zone/RRSet reconcilers (`zone_controller.go`, `rrset_controller.go`) are
+single-pass, not phase machines — every reconcile converges from scratch;
+`status.phase` is informational. They talk to PowerDNS through
+`internal/pdnsclient` (thin in-repo client; same no-third-party-types
+reasoning as the unstructured CNPG builder) using the server's
+`status.apiEndpoint` + API-key Secret. Key semantics: `spec.nameservers`
+and `spec.soa` seed ONCE at zone creation (SOA-seed failure rolls the
+zone back and retries); DNSSEC disable deactivates keys but never
+deletes them (registrar DS stays valid); rrset conflicts reject BOTH
+claimants; apply is compare-before-patch so unchanged records don't bump
+the zone serial; deletion is via finalizer with `deletionPolicy: Orphan`
+opt-out and wedge-proof release when the server/zone CR is already gone
+or Failed. Cross-namespace refs are gated by
+`PowerDNSServer.spec.zoneManagement.allowedNamespaces`. The
+`refKey`-based field indexes in SetupWithManager and any test
+`WithIndex` must stay identical or watches silently miss.
 
 ## Image
 
@@ -185,7 +203,9 @@ admin/scrape paths.
 
 ## Out of scope (do not add without asking)
 
-- Zone/Record/DNSSEC-key CRDs — explicitly deferred to the API + `pdnsutil`.
+- Per-record-type CRDs (A/AAAA/MX/… as separate kinds) — the generic
+  RRSet covers all types. Also out: TSIG keys, catalog zones, zone
+  comments, AXFR allow-lists beyond `masters`.
 - MySQL backend — the field is reserved (`backend.type=mysql`) but the
   reconciler rejects it. Don't wire it in without confirming the user
   still wants it; Postgres-via-CNPG matches the rest of the Aether stack.

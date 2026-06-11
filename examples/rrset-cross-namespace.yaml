@@ -1,0 +1,22 @@
+# An app team manages its own record in a platform-owned zone. The
+# PowerDNSServer must allow the team's namespace:
+#
+#   spec:
+#     zoneManagement:
+#       allowedNamespaces: ["app-team"]   # or ["*"]
+#
+# Prereq: examples/zone-basic.yaml (defines the example-com Zone in aether-system).
+#
+apiVersion: dns.aetherplatform.cloud/v1alpha1
+kind: RRSet
+metadata:
+  name: myapp-example-com
+  namespace: app-team
+spec:
+  zoneRef:
+    name: example-com
+    namespace: aether-system
+  name: myapp.example.com.
+  type: A
+  ttl: 300
+  records: ["203.0.113.42"]

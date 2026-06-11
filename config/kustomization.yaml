@@ -3,5 +3,7 @@ kind: Kustomization
 
 resources:
   - crd/dns.aetherplatform.cloud_powerdnsservers.yaml
+  - crd/dns.aetherplatform.cloud_zones.yaml
+  - crd/dns.aetherplatform.cloud_rrsets.yaml
   - rbac/rbac.yaml
   - manager/deployment.yaml

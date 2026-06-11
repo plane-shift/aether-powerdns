@@ -196,6 +196,12 @@ spec:
                     additionalAllowedAPINamespaces:
                       type: array
                       items: { type: string }
+                zoneManagement:
+                  type: object
+                  properties:
+                    allowedNamespaces:
+                      type: array
+                      items: { type: string }
             status:
               type: object
               properties:
