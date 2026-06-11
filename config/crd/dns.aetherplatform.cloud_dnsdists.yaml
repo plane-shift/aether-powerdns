@@ -10,6 +10,7 @@ spec:
     listKind: DNSDistList
     plural: dnsdists
     singular: dnsdist
+    shortNames: [ddist]
   scope: Namespaced
   versions:
     - name: v1alpha1
