@@ -284,7 +284,8 @@ func (r *DNSDistReconciler) refreshDNSDistStatus(ctx context.Context, d *dnsv1al
 	available := dep.Status.AvailableReplicas == desired && desired > 0
 	if available {
 		setCondOn(&d.Status.Conditions, d.Generation, dnsv1alpha1.ConditionAvailable,
-			metav1.ConditionTrue, "PodsAvailable", "")
+			metav1.ConditionTrue, "PodsAvailable",
+			fmt.Sprintf("%d/%d replicas available", dep.Status.AvailableReplicas, desired))
 	} else {
 		setCondOn(&d.Status.Conditions, d.Generation, dnsv1alpha1.ConditionAvailable,
 			metav1.ConditionFalse, "PodsUnavailable",
@@ -333,7 +334,7 @@ func (r *DNSDistReconciler) refreshDNSDistStatus(ctx context.Context, d *dnsv1al
 	d.Status.ObservedGeneration = d.Generation
 	if available {
 		setCondOn(&d.Status.Conditions, d.Generation, dnsv1alpha1.ConditionReady,
-			metav1.ConditionTrue, "Reconciled", "")
+			metav1.ConditionTrue, "Reconciled", "tier converged and all replicas available")
 	} else {
 		degradedMsg := fmt.Sprintf("%d/%d replicas available", dep.Status.AvailableReplicas, desired)
 		setCondOn(&d.Status.Conditions, d.Generation, dnsv1alpha1.ConditionReady,
