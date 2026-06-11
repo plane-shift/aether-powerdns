@@ -199,14 +199,14 @@ func DNSDistDeployment(d *dnsv1alpha1.DNSDist, configHash string) *appsv1.Deploy
 					Weight: 100,
 					PodAffinityTerm: corev1.PodAffinityTerm{
 						LabelSelector: &metav1.LabelSelector{MatchLabels: lbls},
-						TopologyKey:   "kubernetes.io/hostname",
+						TopologyKey:   corev1.LabelHostname,
 					},
 				}},
 			},
 		}
 		podSpec.TopologySpreadConstraints = []corev1.TopologySpreadConstraint{{
 			MaxSkew:           1,
-			TopologyKey:       "kubernetes.io/hostname",
+			TopologyKey:       corev1.LabelHostname,
 			WhenUnsatisfiable: corev1.ScheduleAnyway,
 			LabelSelector:     &metav1.LabelSelector{MatchLabels: lbls},
 		}}
