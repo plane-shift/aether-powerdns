@@ -698,8 +698,8 @@ func (in *DNSDistSpec) DeepCopyInto(out *DNSDistSpec) {
 	}
 	in.DNS.DeepCopyInto(&out.DNS)
 	in.Cache.DeepCopyInto(&out.Cache)
-	out.RateLimit = in.RateLimit
-	out.TLS = in.TLS
+	in.RateLimit.DeepCopyInto(&out.RateLimit)
+	in.TLS.DeepCopyInto(&out.TLS)
 	if in.PodDisruptionBudget != nil {
 		out.PodDisruptionBudget = new(PDBSpec)
 		in.PodDisruptionBudget.DeepCopyInto(out.PodDisruptionBudget)
@@ -732,6 +732,47 @@ func (in *DNSDistCacheSpec) DeepCopy() *DNSDistCacheSpec {
 		return nil
 	}
 	out := new(DNSDistCacheSpec)
+	in.DeepCopyInto(out)
+	return out
+}
+
+func (in *DNSDistRateLimitSpec) DeepCopyInto(out *DNSDistRateLimitSpec) {
+	*out = *in
+}
+
+func (in *DNSDistRateLimitSpec) DeepCopy() *DNSDistRateLimitSpec {
+	if in == nil {
+		return nil
+	}
+	out := new(DNSDistRateLimitSpec)
+	in.DeepCopyInto(out)
+	return out
+}
+
+func (in *DNSDistTLSListener) DeepCopyInto(out *DNSDistTLSListener) {
+	*out = *in
+}
+
+func (in *DNSDistTLSListener) DeepCopy() *DNSDistTLSListener {
+	if in == nil {
+		return nil
+	}
+	out := new(DNSDistTLSListener)
+	in.DeepCopyInto(out)
+	return out
+}
+
+func (in *DNSDistTLSSpec) DeepCopyInto(out *DNSDistTLSSpec) {
+	*out = *in
+	in.DoT.DeepCopyInto(&out.DoT)
+	in.DoH.DeepCopyInto(&out.DoH)
+}
+
+func (in *DNSDistTLSSpec) DeepCopy() *DNSDistTLSSpec {
+	if in == nil {
+		return nil
+	}
+	out := new(DNSDistTLSSpec)
 	in.DeepCopyInto(out)
 	return out
 }
