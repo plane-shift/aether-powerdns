@@ -25,6 +25,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
+	gatewayv1alpha2 "sigs.k8s.io/gateway-api/apis/v1alpha2"
 
 	dnsv1alpha1 "github.com/plane-shift/aether-powerdns/api/v1alpha1"
 	"github.com/plane-shift/aether-powerdns/internal/cnpg"
@@ -52,7 +54,7 @@ type PowerDNSServerReconciler struct {
 // +kubebuilder:rbac:groups=batch,resources=jobs,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=policy,resources=poddisruptionbudgets,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=postgresql.cnpg.io,resources=clusters,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=tcproutes;udproutes,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=tcproutes;udproutes;httproutes,verbs=get;list;watch;create;update;patch;delete
 
 func (r *PowerDNSServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
@@ -110,6 +112,10 @@ func (r *PowerDNSServerReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&batchv1.Job{}).
 		Owns(&policyv1.PodDisruptionBudget{}).
 		Owns(&networkingv1.NetworkPolicy{}).
+		// Gateway API routes (TCPRoute/UDPRoute/HTTPRoute) are deliberately
+		// NOT in Owns(): their informers would hard-require the Gateway API
+		// CRDs at manager start, breaking clusters that don't install them.
+		// Route drift instead heals on the Ready-loop requeue (30s).
 		Complete(r)
 }
 
@@ -150,6 +156,16 @@ func validateSpec(s *dnsv1alpha1.PowerDNSServer) string {
 		for i, p := range s.Spec.DNS.Gateway.ParentRefs {
 			if p.Name == "" {
 				return fmt.Sprintf("dns.gateway.parentRefs[%d].name is required", i)
+			}
+		}
+	}
+	if gw := s.Spec.API.Gateway; gw != nil {
+		if len(gw.ParentRefs) == 0 {
+			return "api.gateway requires parentRefs (at least one)"
+		}
+		for i, p := range gw.ParentRefs {
+			if p.Name == "" {
+				return fmt.Sprintf("api.gateway.parentRefs[%d].name is required", i)
 			}
 		}
 	}
@@ -394,6 +410,80 @@ func (r *PowerDNSServerReconciler) reconcileNetworkPolicy(ctx context.Context, s
 	return nil
 }
 
+// reconcileRoutes converges the Gateway API routes: TCP/UDP routes exist
+// iff dns.exposure==gateway, the API HTTPRoute iff spec.api.gateway is
+// set. CreateOrUpdate (not create-only ensureOwned) so live parentRef /
+// hostname / sectionName edits propagate; disabled routes are deleted.
+func (r *PowerDNSServerReconciler) reconcileRoutes(ctx context.Context, s *dnsv1alpha1.PowerDNSServer) error {
+	names := manifests.NameSet(s)
+
+	if s.Spec.DNS.Exposure == dnsv1alpha1.DNSExposureGateway {
+		desiredTCP := manifests.TCPRoute(s)
+		tcp := &gatewayv1alpha2.TCPRoute{ObjectMeta: metav1.ObjectMeta{Name: desiredTCP.Name, Namespace: desiredTCP.Namespace}}
+		if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, tcp, func() error {
+			tcp.Labels = desiredTCP.Labels
+			tcp.Spec = desiredTCP.Spec
+			return ctrl.SetControllerReference(s, tcp, r.Scheme)
+		}); err != nil {
+			return fmt.Errorf("ensure tcproute: %w", err)
+		}
+
+		desiredUDP := manifests.UDPRoute(s)
+		udp := &gatewayv1alpha2.UDPRoute{ObjectMeta: metav1.ObjectMeta{Name: desiredUDP.Name, Namespace: desiredUDP.Namespace}}
+		if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, udp, func() error {
+			udp.Labels = desiredUDP.Labels
+			udp.Spec = desiredUDP.Spec
+			return ctrl.SetControllerReference(s, udp, r.Scheme)
+		}); err != nil {
+			return fmt.Errorf("ensure udproute: %w", err)
+		}
+	} else {
+		if err := r.deleteIfExists(ctx, &gatewayv1alpha2.TCPRoute{
+			ObjectMeta: metav1.ObjectMeta{Name: names.TCPRoute, Namespace: s.Namespace},
+		}); err != nil {
+			return fmt.Errorf("delete tcproute: %w", err)
+		}
+		if err := r.deleteIfExists(ctx, &gatewayv1alpha2.UDPRoute{
+			ObjectMeta: metav1.ObjectMeta{Name: names.UDPRoute, Namespace: s.Namespace},
+		}); err != nil {
+			return fmt.Errorf("delete udproute: %w", err)
+		}
+	}
+
+	if desired := manifests.HTTPRoute(s); desired != nil {
+		http := &gatewayv1.HTTPRoute{ObjectMeta: metav1.ObjectMeta{Name: desired.Name, Namespace: desired.Namespace}}
+		op, err := controllerutil.CreateOrUpdate(ctx, r.Client, http, func() error {
+			http.Labels = desired.Labels
+			http.Spec = desired.Spec
+			return ctrl.SetControllerReference(s, http, r.Scheme)
+		})
+		if err != nil {
+			return fmt.Errorf("ensure httproute: %w", err)
+		}
+		if op == controllerutil.OperationResultCreated {
+			r.event(s, corev1.EventTypeNormal, "APIExposed",
+				"HTTP API exposed via Gateway API HTTPRoute "+desired.Name+" — admin surface, ensure TLS at the listener")
+		}
+	} else {
+		if err := r.deleteIfExists(ctx, &gatewayv1.HTTPRoute{
+			ObjectMeta: metav1.ObjectMeta{Name: names.HTTPRoute, Namespace: s.Namespace},
+		}); err != nil {
+			return fmt.Errorf("delete httproute: %w", err)
+		}
+	}
+	return nil
+}
+
+// deleteIfExists removes obj only when it actually exists — the common
+// (non-gateway) path would otherwise fire blind DELETEs on every Ready
+// loop. NotFound on the Get is the steady state and costs one cheap read.
+func (r *PowerDNSServerReconciler) deleteIfExists(ctx context.Context, obj client.Object) error {
+	if err := r.Get(ctx, client.ObjectKeyFromObject(obj), obj); err != nil {
+		return client.IgnoreNotFound(err)
+	}
+	return client.IgnoreNotFound(r.Delete(ctx, obj))
+}
+
 // computeConfigHash hashes the rendered pdns.conf together with the
 // API-key and backend Secret data, so a rotation of either secret bumps
 // the pod template annotation and triggers a rolling restart.
@@ -424,6 +514,10 @@ func (r *PowerDNSServerReconciler) phaseExposingDNS(ctx context.Context, s *dnsv
 	exposure := s.Spec.DNS.Exposure
 	if exposure == "" {
 		exposure = dnsv1alpha1.DNSExposureNone
+	}
+
+	if err := r.reconcileRoutes(ctx, s); err != nil {
+		return ctrl.Result{}, err
 	}
 
 	switch exposure {
@@ -459,14 +553,6 @@ func (r *PowerDNSServerReconciler) phaseExposingDNS(ctx context.Context, s *dnsv
 	case dnsv1alpha1.DNSExposureGateway:
 		if s.Spec.DNS.Gateway == nil || len(s.Spec.DNS.Gateway.ParentRefs) == 0 {
 			return r.setFailed(ctx, s, "dns.exposure=gateway requires dns.gateway.parentRefs")
-		}
-		tcp := manifests.TCPRoute(s)
-		if err := r.ensureOwned(ctx, s, tcp); err != nil {
-			return ctrl.Result{}, fmt.Errorf("ensure tcproute: %w", err)
-		}
-		udp := manifests.UDPRoute(s)
-		if err := r.ensureOwned(ctx, s, udp); err != nil {
-			return ctrl.Result{}, fmt.Errorf("ensure udproute: %w", err)
 		}
 		parents := make([]string, 0, len(s.Spec.DNS.Gateway.ParentRefs))
 		for _, p := range s.Spec.DNS.Gateway.ParentRefs {
@@ -517,6 +603,9 @@ func (r *PowerDNSServerReconciler) reconcileDrift(ctx context.Context, s *dnsv1a
 		return err
 	}
 	if err := r.reconcileAdditionalDNSServices(ctx, s); err != nil {
+		return err
+	}
+	if err := r.reconcileRoutes(ctx, s); err != nil {
 		return err
 	}
 	if pdb := manifests.PodDisruptionBudget(s); pdb != nil {

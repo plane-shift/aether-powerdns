@@ -309,6 +309,10 @@ func (in *APISpec) DeepCopyInto(out *APISpec) {
 		ref := *in.APIKeySecretRef
 		out.APIKeySecretRef = &ref
 	}
+	if in.Gateway != nil {
+		out.Gateway = new(APIGatewaySpec)
+		in.Gateway.DeepCopyInto(out.Gateway)
+	}
 }
 
 func (in *APISpec) DeepCopy() *APISpec {
@@ -580,6 +584,27 @@ func (in *RRSetStatus) DeepCopy() *RRSetStatus {
 		return nil
 	}
 	out := new(RRSetStatus)
+	in.DeepCopyInto(out)
+	return out
+}
+
+func (in *APIGatewaySpec) DeepCopyInto(out *APIGatewaySpec) {
+	*out = *in
+	if in.Hostnames != nil {
+		out.Hostnames = make([]string, len(in.Hostnames))
+		copy(out.Hostnames, in.Hostnames)
+	}
+	if in.ParentRefs != nil {
+		out.ParentRefs = make([]APIGatewayParentRef, len(in.ParentRefs))
+		copy(out.ParentRefs, in.ParentRefs)
+	}
+}
+
+func (in *APIGatewaySpec) DeepCopy() *APIGatewaySpec {
+	if in == nil {
+		return nil
+	}
+	out := new(APIGatewaySpec)
 	in.DeepCopyInto(out)
 	return out
 }

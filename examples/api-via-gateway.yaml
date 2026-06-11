@@ -1,0 +1,41 @@
+# DNS via Gateway API TCP/UDP routes AND the HTTP API via an HTTPRoute
+# on a TLS listener of the same Envoy Gateway. The API is an admin
+# surface — a leaked key gives full zone control: attach it only to TLS
+# listeners and always set hostnames on shared gateways.
+#
+# Prereq: a Gateway named `eg` in `envoy-gateway-system` with listeners
+# `dns-tcp` (TCP/53), `dns-udp` (UDP/53) and `https` (HTTPS/443).
+# With networkPolicy.enabled=true, add "envoy-gateway-system" to
+# networkPolicy.additionalAllowedAPINamespaces or the gateway cannot
+# reach the API port.
+apiVersion: dns.aetherplatform.cloud/v1alpha1
+kind: PowerDNSServer
+metadata:
+  name: gw-demo
+  namespace: aether-system
+spec:
+  backend:
+    type: postgres
+    postgres:
+      instances: 1
+      storageSize: 5Gi
+  dns:
+    exposure: gateway
+    gateway:
+      parentRefs:
+        - group: gateway.networking.k8s.io
+          kind: Gateway
+          name: eg
+          namespace: envoy-gateway-system
+          tcpSectionName: dns-tcp
+          udpSectionName: dns-udp
+  api:
+    gateway:
+      hostnames:
+        - pdns-api.internal.example.com
+      parentRefs:
+        - group: gateway.networking.k8s.io
+          kind: Gateway
+          name: eg
+          namespace: envoy-gateway-system
+          sectionName: https

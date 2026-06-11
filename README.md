@@ -49,7 +49,10 @@ spec:
 CNPG provisioning and points the server at an existing Postgres.
 
 `spec.dns.exposure: gateway` creates `TCPRoute` + `UDPRoute` resources
-attached to a Gateway you supply via `dns.gateway.parentRef`.
+attached to a Gateway you supply via `dns.gateway.parentRefs`. Optionally,
+`spec.api.gateway` additionally exposes the HTTP API via an `HTTPRoute`
+(`<server>-api-http`) — useful for reaching the API through a TLS listener
+on the same Gateway. Independent of `dns.exposure`.
 
 ## Zones and records
 

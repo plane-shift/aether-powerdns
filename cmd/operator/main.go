@@ -10,6 +10,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
+	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 	gatewayv1alpha2 "sigs.k8s.io/gateway-api/apis/v1alpha2"
 
 	dnsv1alpha1 "github.com/plane-shift/aether-powerdns/api/v1alpha1"
@@ -22,6 +23,7 @@ func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 	utilruntime.Must(dnsv1alpha1.AddToScheme(scheme))
 	utilruntime.Must(gatewayv1alpha2.Install(scheme))
+	utilruntime.Must(gatewayv1.Install(scheme))
 }
 
 func main() {

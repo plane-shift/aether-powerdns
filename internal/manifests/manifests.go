@@ -48,7 +48,7 @@ type Names struct {
 	APIService, DNSService        string
 	APIKeySecret, BackendSecret   string
 	SchemaJob, CNPGCluster        string
-	TCPRoute, UDPRoute            string
+	TCPRoute, UDPRoute, HTTPRoute string
 	PDB, PodMonitor, NetPolicy    string
 }
 
@@ -67,6 +67,7 @@ func NameSet(s *dnsv1alpha1.PowerDNSServer) Names {
 		CNPGCluster:   n + "-pg",
 		TCPRoute:      n + "-dns-tcp",
 		UDPRoute:      n + "-dns-udp",
+		HTTPRoute:     n + "-api-http",
 		PDB:           n + "-pdb",
 		PodMonitor:    n + "-metrics",
 		NetPolicy:     n + "-netpol",

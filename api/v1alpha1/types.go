@@ -356,9 +356,17 @@ type DNSGatewaySpec struct {
 	ParentRefs []GatewayParentRef `json:"parentRefs"`
 }
 
-// GatewayParentRef is a minimal subset of gateway.networking.k8s.io
-// ParentReference, with optional per-parent listener section names.
+// GatewayParentRef is a Gateway API ParentReference with optional
+// per-protocol listener section names for the DNS routes.
 type GatewayParentRef struct {
+	// Group of the parent. Defaults to gateway.networking.k8s.io.
+	// +optional
+	Group string `json:"group,omitempty"`
+
+	// Kind of the parent. Defaults to Gateway.
+	// +optional
+	Kind string `json:"kind,omitempty"`
+
 	// Name of the Gateway.
 	// +kubebuilder:validation:Required
 	Name string `json:"name"`
@@ -388,6 +396,54 @@ type APISpec struct {
 	// have an `api-key` key.
 	// +optional
 	APIKeySecretRef *corev1.LocalObjectReference `json:"apiKeySecretRef,omitempty"`
+
+	// Gateway optionally exposes the HTTP API through Gateway API
+	// HTTPRoutes. Unset (default) keeps the API ClusterIP-only. The API
+	// is an admin surface — a leaked key gives full zone control; attach
+	// only to TLS listeners and scope with Hostnames.
+	// +optional
+	Gateway *APIGatewaySpec `json:"gateway,omitempty"`
+}
+
+// APIGatewaySpec attaches an HTTPRoute for the PowerDNS HTTP API to one
+// or more Gateways.
+type APIGatewaySpec struct {
+	// Hostnames the HTTPRoute matches. Empty matches every hostname on
+	// the attached listener (Gateway API default) — set these on shared
+	// gateways.
+	// +optional
+	Hostnames []string `json:"hostnames,omitempty"`
+
+	// ParentRefs lists the Gateways to attach to. At least one required.
+	// +kubebuilder:validation:MinItems=1
+	ParentRefs []APIGatewayParentRef `json:"parentRefs"`
+}
+
+// APIGatewayParentRef is a Gateway API ParentReference for the API
+// HTTPRoute. Unlike GatewayParentRef, a single sectionName suffices —
+// the HTTPRoute attaches to one listener, while the DNS routes need
+// separate TCP and UDP listeners.
+type APIGatewayParentRef struct {
+	// Group of the parent. Defaults to gateway.networking.k8s.io.
+	// +optional
+	Group string `json:"group,omitempty"`
+
+	// Kind of the parent. Defaults to Gateway.
+	// +optional
+	Kind string `json:"kind,omitempty"`
+
+	// Name of the Gateway.
+	// +kubebuilder:validation:Required
+	Name string `json:"name"`
+
+	// Namespace of the Gateway. Defaults to the PowerDNSServer's namespace.
+	// +optional
+	Namespace string `json:"namespace,omitempty"`
+
+	// SectionName picks a listener on this Gateway. Optional — when
+	// unset, the route attaches to the Gateway as a whole.
+	// +optional
+	SectionName string `json:"sectionName,omitempty"`
 }
 
 // PowerDNSServerStatus reflects the observed state of the deployment.

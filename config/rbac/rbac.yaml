@@ -45,7 +45,7 @@ rules:
     resources: ["clusters"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   - apiGroups: ["gateway.networking.k8s.io"]
-    resources: ["tcproutes", "udproutes"]
+    resources: ["tcproutes", "udproutes", "httproutes"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   - apiGroups: ["networking.k8s.io"]
     resources: ["networkpolicies"]
