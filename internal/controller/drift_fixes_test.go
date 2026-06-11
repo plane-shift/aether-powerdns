@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -269,5 +270,101 @@ func TestPhaseInitializingSchemaReplacesFailedJob(t *testing.T) {
 	}
 	if err := c.Get(ctx, types.NamespacedName{Name: "test-schema-init", Namespace: "default"}, &batchv1.Job{}); err != nil {
 		t.Fatalf("fresh schema Job should exist: %v", err)
+	}
+}
+
+// --- issue #9: ConfigMap content convergence + live dnsEndpoint ---
+
+func TestUpdateConfigMapConvergesData(t *testing.T) {
+	scheme := fixesTestScheme(t)
+	var updates int32
+	c := fake.NewClientBuilder().WithScheme(scheme).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Update: func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
+				if _, ok := obj.(*corev1.ConfigMap); ok {
+					atomic.AddInt32(&updates, 1)
+				}
+				return cl.Update(ctx, obj, opts...)
+			},
+		}).Build()
+	r := &PowerDNSServerReconciler{Client: c, Scheme: scheme}
+	s := lbServer()
+	ctx := context.Background()
+
+	if err := r.updateConfigMap(ctx, s, manifests.ConfigMap(s)); err != nil {
+		t.Fatalf("initial create: %v", err)
+	}
+
+	// Spec change re-renders pdns.conf — the live ConfigMap must follow
+	// (ensureOwned was create-only: pods rolled on the new hash while
+	// mounting stale content).
+	s.Spec.API.Port = 9090
+	if err := r.updateConfigMap(ctx, s, manifests.ConfigMap(s)); err != nil {
+		t.Fatal(err)
+	}
+	cm := &corev1.ConfigMap{}
+	if err := c.Get(ctx, types.NamespacedName{Name: "test-config", Namespace: "default"}, cm); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(cm.Data["pdns.conf"], "9090") {
+		t.Error("live ConfigMap still serves stale pdns.conf after spec change")
+	}
+	if updates != 1 {
+		t.Errorf("expected exactly 1 update, got %d", updates)
+	}
+
+	// Steady state: no write.
+	if err := r.updateConfigMap(ctx, s, manifests.ConfigMap(s)); err != nil {
+		t.Fatal(err)
+	}
+	if updates != 1 {
+		t.Errorf("steady state must not write, got %d updates", updates)
+	}
+}
+
+func TestRefreshDNSEndpointTracksLBAssignment(t *testing.T) {
+	scheme := fixesTestScheme(t)
+	s := lbServer()
+	s.Status.Phase = dnsv1alpha1.PhaseReady
+	s.Status.DNSEndpoint = "10.1.0.241:53" // stale claim from ExposingDNS
+	svc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-dns", Namespace: "default"},
+		Spec:       corev1.ServiceSpec{Type: corev1.ServiceTypeLoadBalancer},
+	}
+	c := fake.NewClientBuilder().WithScheme(scheme).
+		WithStatusSubresource(&dnsv1alpha1.PowerDNSServer{}).
+		WithObjects(s, svc).Build()
+	r := &PowerDNSServerReconciler{Client: c, Scheme: scheme}
+	ctx := context.Background()
+	key := types.NamespacedName{Name: "test", Namespace: "default"}
+
+	// LB has NO assigned address: the stale endpoint must be cleared.
+	if err := r.refreshDNSEndpoint(ctx, s); err != nil {
+		t.Fatal(err)
+	}
+	got := &dnsv1alpha1.PowerDNSServer{}
+	if err := c.Get(ctx, key, got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Status.DNSEndpoint != "" {
+		t.Errorf("pending LB must clear dnsEndpoint, still %q (issue #9)", got.Status.DNSEndpoint)
+	}
+
+	// Address assigned: endpoint comes back.
+	if err := c.Get(ctx, types.NamespacedName{Name: "test-dns", Namespace: "default"}, svc); err != nil {
+		t.Fatal(err)
+	}
+	svc.Status.LoadBalancer.Ingress = []corev1.LoadBalancerIngress{{IP: "10.1.0.241"}}
+	if err := c.Status().Update(ctx, svc); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.refreshDNSEndpoint(ctx, s); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Get(ctx, key, got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Status.DNSEndpoint != "10.1.0.241:53" {
+		t.Errorf("assigned LB must restore dnsEndpoint, got %q", got.Status.DNSEndpoint)
 	}
 }

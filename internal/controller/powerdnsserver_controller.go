@@ -331,7 +331,7 @@ func (r *PowerDNSServerReconciler) phaseDeployingServer(ctx context.Context, s *
 // the API-key / backend Secret triggers a rolling restart.
 func (r *PowerDNSServerReconciler) ensureWorkload(ctx context.Context, s *dnsv1alpha1.PowerDNSServer) error {
 	cm := manifests.ConfigMap(s)
-	if err := r.ensureOwned(ctx, s, cm); err != nil {
+	if err := r.updateConfigMap(ctx, s, cm); err != nil {
 		return fmt.Errorf("ensure configmap: %w", err)
 	}
 
@@ -640,6 +640,9 @@ func (r *PowerDNSServerReconciler) phaseReady(ctx context.Context, s *dnsv1alpha
 	if err := r.reconcileDrift(ctx, s); err != nil {
 		return ctrl.Result{}, err
 	}
+	if err := r.refreshDNSEndpoint(ctx, s); err != nil {
+		return ctrl.Result{}, err
+	}
 	if err := r.refreshReplicaStatus(ctx, s); err != nil {
 		return ctrl.Result{}, err
 	}
@@ -652,7 +655,7 @@ func (r *PowerDNSServerReconciler) phaseReady(ctx context.Context, s *dnsv1alpha
 // in-place update because ClusterIP is immutable.
 func (r *PowerDNSServerReconciler) reconcileDrift(ctx context.Context, s *dnsv1alpha1.PowerDNSServer) error {
 	cm := manifests.ConfigMap(s)
-	if err := r.ensureOwned(ctx, s, cm); err != nil {
+	if err := r.updateConfigMap(ctx, s, cm); err != nil {
 		return err
 	}
 	hash, err := r.computeConfigHash(ctx, s, cm)
@@ -1008,6 +1011,88 @@ func servicePortsMatch(a, b corev1.ServicePort) bool {
 		return a.Name == b.Name
 	}
 	return a.Port == b.Port && a.Protocol == b.Protocol
+}
+
+// updateConfigMap converges the rendered ConfigMap (issue #9): ensureOwned
+// is create-only, so a pdns.conf re-render used to roll the pods (via the
+// config-hash annotation) while the mounted ConfigMap kept serving stale
+// content. Steady state skips the write.
+func (r *PowerDNSServerReconciler) updateConfigMap(ctx context.Context, s *dnsv1alpha1.PowerDNSServer, desired *corev1.ConfigMap) error {
+	existing := &corev1.ConfigMap{}
+	err := r.Get(ctx, types.NamespacedName{Name: desired.Name, Namespace: desired.Namespace}, existing)
+	if apierrors.IsNotFound(err) {
+		return r.ensureOwned(ctx, s, desired)
+	}
+	if err != nil {
+		return err
+	}
+	if equality.Semantic.DeepEqual(existing.Data, desired.Data) {
+		return nil
+	}
+	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		if err := r.Get(ctx, types.NamespacedName{Name: desired.Name, Namespace: desired.Namespace}, existing); err != nil {
+			return err
+		}
+		existing.Data = desired.Data
+		return r.Update(ctx, existing)
+	})
+}
+
+// refreshDNSEndpoint re-derives status.dnsEndpoint from live state on
+// every Ready pass (issue #9): it was previously written once during
+// ExposingDNS and could go stale — notably advertising the requested LB
+// IP while the Service actually sat unassigned.
+func (r *PowerDNSServerReconciler) refreshDNSEndpoint(ctx context.Context, s *dnsv1alpha1.PowerDNSServer) error {
+	exposure := s.Spec.DNS.Exposure
+	if exposure == "" {
+		exposure = dnsv1alpha1.DNSExposureNone
+	}
+
+	var endpoint string
+	switch exposure {
+	case dnsv1alpha1.DNSExposureNone, dnsv1alpha1.DNSExposureLoadBalancer:
+		svc := &corev1.Service{}
+		if err := r.Get(ctx, types.NamespacedName{Name: manifests.NameSet(s).DNSService, Namespace: s.Namespace}, svc); err != nil {
+			return client.IgnoreNotFound(err)
+		}
+		if exposure == dnsv1alpha1.DNSExposureNone {
+			endpoint = fmt.Sprintf("%s:53", svc.Spec.ClusterIP)
+			break
+		}
+		for _, ing := range svc.Status.LoadBalancer.Ingress {
+			if ing.IP != "" {
+				endpoint = ing.IP + ":53"
+				break
+			}
+			if ing.Hostname != "" {
+				endpoint = ing.Hostname + ":53"
+				break
+			}
+		}
+		if endpoint == "" && s.Status.DNSEndpoint != "" {
+			r.event(s, corev1.EventTypeWarning, "LoadBalancerPending",
+				"DNS LoadBalancer has no assigned address; clearing status.dnsEndpoint")
+		}
+	case dnsv1alpha1.DNSExposureGateway:
+		if s.Spec.DNS.Gateway == nil {
+			break
+		}
+		parents := make([]string, 0, len(s.Spec.DNS.Gateway.ParentRefs))
+		for _, p := range s.Spec.DNS.Gateway.ParentRefs {
+			ns := p.Namespace
+			if ns == "" {
+				ns = s.Namespace
+			}
+			parents = append(parents, fmt.Sprintf("%s/%s", ns, p.Name))
+		}
+		endpoint = "gateway:" + strings.Join(parents, ",")
+	}
+
+	if s.Status.DNSEndpoint == endpoint {
+		return nil
+	}
+	s.Status.DNSEndpoint = endpoint
+	return r.Status().Update(ctx, s)
 }
 
 func (r *PowerDNSServerReconciler) setPhase(ctx context.Context, s *dnsv1alpha1.PowerDNSServer, phase string) (ctrl.Result, error) {
