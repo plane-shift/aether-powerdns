@@ -416,8 +416,9 @@ func Deployment(s *dnsv1alpha1.PowerDNSServer, configHash string) *appsv1.Deploy
 
 // pdbFor renders a PodDisruptionBudget for any operator-managed workload.
 // nil when replicas <= 1 (a single-replica PDB would block every drain).
-// Default minAvailable is replicas-1; the override is clamped into
-// [1, replicas-1] by validateSpec before it gets here.
+// Default minAvailable is replicas-1; the override is validated to
+// [1, replicas-1] before it gets here (lower bound by the CRD schema,
+// upper bound rejected by validateSpec).
 func pdbFor(name, namespace string, lbls map[string]string, replicas int32, override *int32) *policyv1.PodDisruptionBudget {
 	if replicas <= 1 {
 		return nil

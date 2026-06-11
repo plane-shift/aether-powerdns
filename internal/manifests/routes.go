@@ -117,7 +117,8 @@ func HTTPRoute(s *dnsv1alpha1.PowerDNSServer) *gatewayv1.HTTPRoute {
 	api := apiSpecOrDefault(s)
 
 	parents := make([]gatewayv1.ParentReference, 0, len(gw.ParentRefs))
-	// Same construction rules as gatewayParents — keep the two in sync.
+	// Same parentRef construction as dnsRouteParents, except HTTPRoute
+	// uses the single SectionName field (no per-proto split).
 	for _, p := range gw.ParentRefs {
 		ref := gatewayv1.ParentReference{Name: gatewayv1.ObjectName(p.Name)}
 		if p.Group != "" {
