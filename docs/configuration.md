@@ -135,9 +135,9 @@ always reports the in-cluster ClusterIP URL — Zone and RRSet controllers
 consume it directly and are not affected by gateway exposure.
 
 When `api.gateway` is unset (the default), the API is ClusterIP-only.
-Setting `hostnames: []` (or omitting `hostnames`) matches **all**
-hostnames on the listener — only do this on a listener that is already
-hostname-restricted or dedicated to this server.
+Omitting `hostnames` (or setting it to an empty list — equivalent) matches **all**
+hostnames on the listener; set hostnames on shared gateways to prevent
+accidental matches.
 
 **Security:** attach `api.gateway` only to TLS listeners (port 443 /
 HTTPS). On a shared gateway, always set `hostnames` to prevent other

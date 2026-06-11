@@ -150,8 +150,9 @@ networkPolicy.enabled add the gateway's namespace to
 `additionalAllowedAPINamespaces`. `status.apiEndpoint` stays the
 ClusterIP URL (Zone/RRSet controllers consume it). Routes (TCP/UDP/HTTP)
 are drift-corrected by `reconcileRoutes` (CreateOrUpdate from
-phaseExposingDNS + reconcileDrift; disabled routes deleted). Gateway
-route types are deliberately NOT in `Owns()` — their informers would
+phaseExposingDNS + reconcileDrift; disabled routes deleted).
+
+Gateway route types are deliberately NOT in `Owns()` — their informers would
 hard-require the Gateway API CRDs at manager start; drift heals on the
 30s requeue instead.
 

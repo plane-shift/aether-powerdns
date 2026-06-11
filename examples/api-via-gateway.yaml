@@ -1,4 +1,4 @@
-# DNS via Gateway API TCP/UDP listeners AND the HTTP API via an HTTPRoute
+# DNS via Gateway API TCP/UDP routes AND the HTTP API via an HTTPRoute
 # on a TLS listener of the same Envoy Gateway. The API is an admin
 # surface — a leaked key gives full zone control: attach it only to TLS
 # listeners and always set hostnames on shared gateways.
