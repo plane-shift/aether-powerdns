@@ -156,6 +156,78 @@ func TestDNSDistServiceAndPDBAndRoutes(t *testing.T) {
 	}
 }
 
+func TestDNSDistAdditionalDNSServices(t *testing.T) {
+	// nil when exposure != loadBalancer
+	d := testDNSDist()
+	d.Spec.DNS = dnsv1alpha1.DNSSpec{
+		Exposure: dnsv1alpha1.DNSExposureGateway,
+		Gateway:  &dnsv1alpha1.DNSGatewaySpec{ParentRefs: []dnsv1alpha1.GatewayParentRef{{Name: "gw"}}},
+	}
+	if svcs := DNSDistAdditionalDNSServices(d); svcs != nil {
+		t.Errorf("must be nil when exposure=gateway, got %v", svcs)
+	}
+
+	// renders with suffixed name, LB type, ETP defaulting to Local
+	d2 := testDNSDist()
+	ip1 := "1.2.3.4"
+	d2.Spec.DNS = dnsv1alpha1.DNSSpec{
+		Exposure: dnsv1alpha1.DNSExposureLoadBalancer,
+		LoadBalancer: &dnsv1alpha1.DNSLoadBalancerSpec{
+			AdditionalServices: []dnsv1alpha1.AdditionalLoadBalancerService{
+				{NameSuffix: "-extra", IP: ip1},
+			},
+		},
+	}
+	svcs := DNSDistAdditionalDNSServices(d2)
+	if len(svcs) != 1 {
+		t.Fatalf("want 1 additional service, got %d", len(svcs))
+	}
+	svc := svcs[0]
+	if svc.Name != "edge-dnsdist-dns-extra" {
+		t.Errorf("name = %q, want edge-dnsdist-dns-extra", svc.Name)
+	}
+	if svc.Spec.Type != corev1.ServiceTypeLoadBalancer {
+		t.Errorf("type = %q, want LoadBalancer", svc.Spec.Type)
+	}
+	if svc.Spec.LoadBalancerIP != ip1 {
+		t.Errorf("LoadBalancerIP = %q, want %q", svc.Spec.LoadBalancerIP, ip1)
+	}
+	if svc.Spec.ExternalTrafficPolicy != corev1.ServiceExternalTrafficPolicyLocal {
+		t.Errorf("ETP = %q, want Local", svc.Spec.ExternalTrafficPolicy)
+	}
+	// ports should include dns-tcp and dns-udp
+	portNames := map[string]bool{}
+	for _, p := range svc.Spec.Ports {
+		portNames[p.Name] = true
+	}
+	if !portNames["dns-tcp"] || !portNames["dns-udp"] {
+		t.Errorf("missing required ports, got %v", portNames)
+	}
+
+	// DoT port included when enabled
+	d3 := testDNSDist()
+	d3.Spec.DNS = dnsv1alpha1.DNSSpec{
+		Exposure: dnsv1alpha1.DNSExposureLoadBalancer,
+		LoadBalancer: &dnsv1alpha1.DNSLoadBalancerSpec{
+			AdditionalServices: []dnsv1alpha1.AdditionalLoadBalancerService{{NameSuffix: "-b"}},
+		},
+	}
+	d3.Spec.TLS.DoT = dnsv1alpha1.DNSDistTLSListener{Enabled: true, CertificateSecretRef: corev1.LocalObjectReference{Name: "c"}}
+	svcs3 := DNSDistAdditionalDNSServices(d3)
+	if len(svcs3) != 1 {
+		t.Fatalf("want 1 service, got %d", len(svcs3))
+	}
+	dotFound := false
+	for _, p := range svcs3[0].Spec.Ports {
+		if p.Name == "dot" {
+			dotFound = true
+		}
+	}
+	if !dotFound {
+		t.Error("DoT port must appear in additional services when TLS.DoT is enabled")
+	}
+}
+
 func TestDNSDistConfigDeterministic(t *testing.T) {
 	d := testDNSDist()
 	first := DNSDistConfig(d)

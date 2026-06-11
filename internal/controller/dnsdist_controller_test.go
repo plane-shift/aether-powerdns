@@ -162,6 +162,60 @@ func TestDNSDistValidateRejectsCrossNamespaceAndBadPDB(t *testing.T) {
 	}
 }
 
+func TestDNSDistAdditionalServicesReconcile(t *testing.T) {
+	d := edgeDNSDist()
+	d.Spec.DNS = dnsv1alpha1.DNSSpec{
+		Exposure: dnsv1alpha1.DNSExposureLoadBalancer,
+		LoadBalancer: &dnsv1alpha1.DNSLoadBalancerSpec{
+			AdditionalServices: []dnsv1alpha1.AdditionalLoadBalancerService{
+				{NameSuffix: "-extra", IP: "1.2.3.4"},
+			},
+		},
+	}
+	r, c := newDNSDistReconciler(t, d, readyBackend("srv-a"))
+	key := types.NamespacedName{Name: "edge", Namespace: "default"}
+	ctx := context.Background()
+	reconcileDNSDistN(t, r, key, 2)
+
+	// Additional Service must be created and owner-ref'd.
+	extraSvc := &corev1.Service{}
+	if err := c.Get(ctx, types.NamespacedName{Name: "edge-dnsdist-dns-extra", Namespace: "default"}, extraSvc); err != nil {
+		t.Fatalf("additional service: %v", err)
+	}
+	if len(extraSvc.OwnerReferences) == 0 {
+		t.Error("additional service must have owner reference")
+	}
+	if extraSvc.Spec.Type != corev1.ServiceTypeLoadBalancer {
+		t.Errorf("additional service type = %q, want LoadBalancer", extraSvc.Spec.Type)
+	}
+
+	// Primary DNS Service must still exist.
+	primarySvc := &corev1.Service{}
+	if err := c.Get(ctx, types.NamespacedName{Name: "edge-dnsdist-dns", Namespace: "default"}, primarySvc); err != nil {
+		t.Fatalf("primary service must survive: %v", err)
+	}
+
+	// Remove additional service from spec; reconcile; it must be GC'd.
+	got := &dnsv1alpha1.DNSDist{}
+	if err := c.Get(ctx, key, got); err != nil {
+		t.Fatal(err)
+	}
+	got.Spec.DNS.LoadBalancer.AdditionalServices = nil
+	if err := c.Update(ctx, got); err != nil {
+		t.Fatal(err)
+	}
+	reconcileDNSDistN(t, r, key, 2)
+
+	deleted := &corev1.Service{}
+	if err := c.Get(ctx, types.NamespacedName{Name: "edge-dnsdist-dns-extra", Namespace: "default"}, deleted); err == nil {
+		t.Error("additional service must be garbage-collected when removed from spec")
+	}
+	// Primary still alive.
+	if err := c.Get(ctx, types.NamespacedName{Name: "edge-dnsdist-dns", Namespace: "default"}, primarySvc); err != nil {
+		t.Fatalf("primary service must survive GC: %v", err)
+	}
+}
+
 func TestDNSDistConfChangeUpdatesConfigMap(t *testing.T) {
 	r, c := newDNSDistReconciler(t, edgeDNSDist(), readyBackend("srv-a"), readyBackend("srv-b"))
 	key := types.NamespacedName{Name: "edge", Namespace: "default"}

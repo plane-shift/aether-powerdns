@@ -256,6 +256,66 @@ func DNSDistDNSService(d *dnsv1alpha1.DNSDist) *corev1.Service {
 	return svc
 }
 
+// DNSDistAdditionalDNSServices renders the extra LoadBalancer Services
+// declared under spec.dns.loadBalancer.additionalServices. Returns nil
+// when exposure != loadBalancer or no additional services are configured.
+// Each Service uses the same pod selector/ports as the primary DNS Service
+// (including optional DoT/DoH ports).
+func DNSDistAdditionalDNSServices(d *dnsv1alpha1.DNSDist) []*corev1.Service {
+	if d.Spec.DNS.Exposure != dnsv1alpha1.DNSExposureLoadBalancer ||
+		d.Spec.DNS.LoadBalancer == nil ||
+		len(d.Spec.DNS.LoadBalancer.AdditionalServices) == 0 {
+		return nil
+	}
+	names := DNSDistNameSet(d)
+	lbls := dnsdistLabels(d)
+	// Build the base port list once (matches primary Service ports).
+	basePorts := []corev1.ServicePort{
+		{Name: "dns-tcp", Port: dnsTCPPort, TargetPort: intstr.FromInt(dnsTCPPort), Protocol: corev1.ProtocolTCP},
+		{Name: "dns-udp", Port: dnsUDPPort, TargetPort: intstr.FromInt(dnsUDPPort), Protocol: corev1.ProtocolUDP},
+	}
+	if d.Spec.TLS.DoT.Enabled {
+		basePorts = append(basePorts, corev1.ServicePort{Name: "dot", Port: dotPort, TargetPort: intstr.FromInt(dotPort), Protocol: corev1.ProtocolTCP})
+	}
+	if d.Spec.TLS.DoH.Enabled {
+		basePorts = append(basePorts, corev1.ServicePort{Name: "doh", Port: dohPort, TargetPort: intstr.FromInt(dohPort), Protocol: corev1.ProtocolTCP})
+	}
+
+	out := make([]*corev1.Service, 0, len(d.Spec.DNS.LoadBalancer.AdditionalServices))
+	for _, extra := range d.Spec.DNS.LoadBalancer.AdditionalServices {
+		ports := make([]corev1.ServicePort, len(basePorts))
+		copy(ports, basePorts)
+		svc := &corev1.Service{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      names.DNSService + extra.NameSuffix,
+				Namespace: d.Namespace,
+				Labels:    lbls,
+			},
+			Spec: corev1.ServiceSpec{
+				Type:     corev1.ServiceTypeLoadBalancer,
+				Selector: lbls,
+				Ports:    ports,
+			},
+		}
+		if extra.IP != "" {
+			svc.Spec.LoadBalancerIP = extra.IP
+		}
+		if len(extra.Annotations) > 0 {
+			svc.Annotations = map[string]string{}
+			for k, v := range extra.Annotations {
+				svc.Annotations[k] = v
+			}
+		}
+		if extra.ExternalTrafficPolicy != "" {
+			svc.Spec.ExternalTrafficPolicy = extra.ExternalTrafficPolicy
+		} else {
+			svc.Spec.ExternalTrafficPolicy = corev1.ServiceExternalTrafficPolicyLocal
+		}
+		out = append(out, svc)
+	}
+	return out
+}
+
 // DNSDistPDB delegates to the shared pdbFor (same semantics as servers).
 func DNSDistPDB(d *dnsv1alpha1.DNSDist) *policyv1.PodDisruptionBudget {
 	var override *int32
