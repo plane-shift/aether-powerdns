@@ -295,7 +295,12 @@ func (r *PowerDNSServerReconciler) cnpgClusterReady(ctx context.Context, s *dnsv
 		return false, client.IgnoreNotFound(err)
 	}
 	ready, found, err := unstructured.NestedInt64(u.Object, "status", "readyInstances")
-	if err != nil || !found {
+	if err != nil {
+		// Don't swallow a coercion error: silently holding "not ready"
+		// forever is the same wedge class this gate exists to prevent.
+		return false, fmt.Errorf("read CNPG cluster readyInstances: %w", err)
+	}
+	if !found {
 		return false, nil
 	}
 	return ready >= 1, nil
