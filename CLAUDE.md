@@ -32,6 +32,18 @@ make deploy         # kubectl apply -k config/
 
 Run a single test: `go test ./internal/controller/... -run TestName`.
 
+## Releasing & dev deployment
+
+`make deploy` is for ad-hoc clusters only. The dev mgmt cluster is
+ArgoCD-managed: the `powerdns-operator` app (aether-infra
+`clusters/mgmt/apps/powerdns-operator.yaml`) pins a git TAG as
+`targetRevision` AND a kustomize image override — release = tag `vX.Y.Z`
+(build workflow publishes `ghcr.io/...:vX.Y.Z`) → bump BOTH fields in one
+aether-infra PR → hard-refresh `aether-apps` (the app-of-apps owns the
+Application spec) THEN `powerdns-operator`. selfHeal reverts any manual
+`kubectl set image`/`scale`/RBAC apply. Dev pins the pdns image to a
+digest via `spec.image` in aether-infra's `powerdns-server` manifests.
+
 ## Architecture
 
 Single CRD `PowerDNSServer` (group `dns.aetherplatform.cloud/v1alpha1`)
@@ -183,6 +195,13 @@ When extending validation, prefer CEL — it runs at admission and surfaces
 in `kubectl apply` errors. Fall back to the controller only for
 cross-resource checks CEL can't express.
 
+CEL cost budget (burnt in v0.1.1): spec-level rules comparing unbounded
+strings get REJECTED at admission ("cost exceeds budget"). Put
+immutability rules on the narrowest field/object as `self == oldSelf`,
+give every string/array a CEL rule touches `maxLength`/`maxItems`, and
+apply new CRDs to a real apiserver before tagging — no local check
+catches this.
+
 ## Network policy
 
 `spec.networkPolicy.enabled=true` installs a Kubernetes `NetworkPolicy`:
@@ -214,6 +233,20 @@ admin/scrape paths.
 - Module path `github.com/plane-shift/aether-powerdns`, repo lives at
   `plane-shift/aether-powerdns` on GitHub (per the org convention shared
   with `aether-operator`).
+- Tests: controller-runtime fake client (`WithStatusSubresource` for any
+  status writer; `WithIndex` extractors MUST mirror SetupWithManager's or
+  watches silently miss), `pdnsfake_test.go` in-memory PowerDNS (fault
+  injection via `failNextPatch`), `interceptor.Funcs` to simulate
+  conflicts and missing-CRD `NoKindMatchError`.
+- Converge-helper rules (issues #9/#13): steady state must be a WRITE
+  no-op (resourceVersion churn races LB controllers); MERGE annotations,
+  never replace (MetalLB/Cilium annotate Services too); preserve
+  apiserver-assigned NodePorts. Job health: with `RestartPolicy:
+  OnFailure` the `status.failed` counter is unreliable — gate on the
+  `JobFailed` condition.
+- Gateway exposure needs the Gateway API EXPERIMENTAL channel
+  (TCPRoute/UDPRoute aren't in standard); the operator tolerates missing
+  route CRDs (IsNoMatchError → skip deletes, clear error on ensure).
 
 ## Out of scope (do not add without asking)
 
