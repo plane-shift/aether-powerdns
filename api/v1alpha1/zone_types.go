@@ -105,8 +105,10 @@ type ZoneSpec struct {
 	// +optional
 	Nameservers []string `json:"nameservers,omitempty"`
 
-	// SOA overrides the seeded SOA record at zone creation. Create-only,
-	// like Nameservers. Ignored for Secondary zones.
+	// SOA customizes the SOA record the operator ALWAYS seeds at zone
+	// creation (primary = first nameserver, hostmaster.<zone> default —
+	// never PowerDNS's "misconfigured" placeholder). Create-only, like
+	// Nameservers. Ignored for Secondary zones.
 	// +optional
 	SOA *SOASpec `json:"soa,omitempty"`
 

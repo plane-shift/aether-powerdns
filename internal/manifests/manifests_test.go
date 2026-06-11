@@ -120,3 +120,13 @@ func TestDeploymentArgsCarryAPIKeyAndGpgsqlSettings(t *testing.T) {
 		}
 	}
 }
+
+// Out-of-band zone creations (HTTP API / pdnsutil) must not inherit the
+// "a.misconfigured.dns.server.invalid." placeholder either: pdns.conf
+// carries a sane default-soa-content (@ = the zone name).
+func TestPDNSConfigSetsDefaultSOAContent(t *testing.T) {
+	conf := PDNSConfig(testServer())
+	if !strings.Contains(conf, "default-soa-content=@ hostmaster.@ 0 10800 3600 604800 3600") {
+		t.Errorf("pdns.conf missing sane default-soa-content:\n%s", conf)
+	}
+}

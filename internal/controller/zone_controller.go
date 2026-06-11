@@ -172,20 +172,31 @@ func (r *ZoneReconciler) createZone(ctx context.Context, zone *dnsv1alpha1.Zone,
 		return nil, err
 	}
 
-	if zone.Spec.SOA != nil && kind != dnsv1alpha1.ZoneKindSecondary {
+	if kind != dnsv1alpha1.ZoneKindSecondary {
+		// ALWAYS seed a correct SOA — without this, the zone inherits
+		// PowerDNS's default-soa-content placeholder
+		// ("a.misconfigured.dns.server.invalid."). spec.soa only
+		// customizes hostmaster/TTL; the primary is the first declared
+		// nameserver (zone apex as a last resort).
 		primary := zone.Spec.ZoneName
 		if len(zone.Spec.Nameservers) > 0 {
 			primary = zone.Spec.Nameservers[0]
 		}
+		hostmaster := "hostmaster." + zone.Spec.ZoneName
 		ttl := int32(3600)
-		if zone.Spec.SOA.TTL != nil {
-			ttl = *zone.Spec.SOA.TTL
+		if zone.Spec.SOA != nil {
+			if zone.Spec.SOA.Hostmaster != "" {
+				hostmaster = zone.Spec.SOA.Hostmaster
+			}
+			if zone.Spec.SOA.TTL != nil {
+				ttl = *zone.Spec.SOA.TTL
+			}
 		}
 		// serial 0: PowerDNS bumps it on every API change.
 		soa := pdnsclient.RRSet{
 			Name: zone.Spec.ZoneName, Type: "SOA", TTL: ttl, ChangeType: "REPLACE",
 			Records: []pdnsclient.Record{{
-				Content: fmt.Sprintf("%s %s 0 10800 3600 604800 3600", primary, zone.Spec.SOA.Hostmaster),
+				Content: fmt.Sprintf("%s %s 0 10800 3600 604800 3600", primary, hostmaster),
 			}},
 		}
 		if err := pc.PatchRRSets(ctx, zone.Spec.ZoneName, []pdnsclient.RRSet{soa}); err != nil {

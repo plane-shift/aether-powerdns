@@ -127,6 +127,10 @@ api=yes
 # api-key, gpgsql-host, gpgsql-port, gpgsql-dbname, gpgsql-user, gpgsql-password
 # are passed on the command line (--api-key=$(PDNS_AUTH_API_KEY), ...) —
 # Secret-sourced env expanded by the kubelet, never written to this file.
+# Sane SOA for zones created out of band (API/pdnsutil): @ expands to
+# the zone name — never the upstream "a.misconfigured..." placeholder.
+# Zone-CR creations get an explicit SOA seeded by the operator anyway.
+default-soa-content=@ hostmaster.@ 0 10800 3600 604800 3600
 loglevel=4
 `, dnsTCPPort, api.Port)
 }
