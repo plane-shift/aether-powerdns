@@ -5,5 +5,6 @@ resources:
   - crd/dns.aetherplatform.cloud_powerdnsservers.yaml
   - crd/dns.aetherplatform.cloud_zones.yaml
   - crd/dns.aetherplatform.cloud_rrsets.yaml
+  - crd/dns.aetherplatform.cloud_dnsdists.yaml
   - rbac/rbac.yaml
   - manager/deployment.yaml

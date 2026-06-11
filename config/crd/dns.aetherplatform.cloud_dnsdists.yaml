@@ -2,15 +2,14 @@
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
-  name: powerdnsservers.dns.aetherplatform.cloud
+  name: dnsdists.dns.aetherplatform.cloud
 spec:
   group: dns.aetherplatform.cloud
   names:
-    kind: PowerDNSServer
-    listKind: PowerDNSServerList
-    plural: powerdnsservers
-    singular: powerdnsserver
-    shortNames: [pdns]
+    kind: DNSDist
+    listKind: DNSDistList
+    plural: dnsdists
+    singular: dnsdist
   scope: Namespaced
   versions:
     - name: v1alpha1
@@ -22,9 +21,6 @@ spec:
         - jsonPath: .status.phase
           name: Phase
           type: string
-        - jsonPath: .spec.backend.type
-          name: Backend
-          type: string
         - jsonPath: .status.readyReplicas
           name: Ready
           type: integer
@@ -33,9 +29,6 @@ spec:
           type: integer
         - jsonPath: .status.dnsEndpoint
           name: DNS
-          type: string
-        - jsonPath: .status.apiEndpoint
-          name: API
           type: string
         - jsonPath: .metadata.creationTimestamp
           name: Age
@@ -49,7 +42,7 @@ spec:
             metadata: { type: object }
             spec:
               type: object
-              required: [backend]
+              required: [backendRefs]
               properties:
                 replicas:
                   type: integer
@@ -58,51 +51,33 @@ spec:
                   default: 1
                 image:
                   type: string
+                  maxLength: 512
                 resources:
                   type: object
                   x-kubernetes-preserve-unknown-fields: true
-                backend:
+                scheduling:
                   type: object
-                  required: [type]
-                  x-kubernetes-validations:
-                    - rule: "self.type == oldSelf.type"
-                      message: "backend.type is immutable after creation"
                   properties:
-                    type:
-                      type: string
-                      enum: [postgres, mysql]
-                      default: postgres
-                    postgres:
+                    nodeSelector:
                       type: object
-                      properties:
-                        instances:
-                          type: integer
-                          format: int32
-                          minimum: 1
-                          default: 1
-                        storageSize:
-                          type: string
-                          default: 5Gi
-                        storageClass:
-                          type: string
-                        byo:
-                          type: object
-                          required: [host, credentialsSecretRef]
-                          properties:
-                            host: { type: string }
-                            port:
-                              type: integer
-                              format: int32
-                              default: 5432
-                            database:
-                              type: string
-                              default: powerdns
-                            credentialsSecretRef:
-                              type: object
-                              required: [name]
-                              properties:
-                                name: { type: string }
-                            sslMode: { type: string }
+                      additionalProperties: { type: string }
+                    tolerations:
+                      type: array
+                      items:
+                        type: object
+                        x-kubernetes-preserve-unknown-fields: true
+                    priorityClassName: { type: string }
+                    spreadAcrossZones: { type: boolean, default: false }
+                backendRefs:
+                  type: array
+                  minItems: 1
+                  maxItems: 16
+                  items:
+                    type: object
+                    required: [name]
+                    properties:
+                      name: { type: string, minLength: 1, maxLength: 253 }
+                      namespace: { type: string, maxLength: 63 }
                 dns:
                   type: object
                   properties:
@@ -156,79 +131,46 @@ spec:
                               namespace: { type: string, maxLength: 63 }
                               tcpSectionName: { type: string, maxLength: 253 }
                               udpSectionName: { type: string, maxLength: 253 }
-                api:
+                cache:
                   type: object
                   properties:
-                    port:
+                    enabled:
+                      type: boolean
+                      default: true
+                    maxEntries:
                       type: integer
                       format: int32
-                      default: 8081
-                    apiKeySecretRef:
-                      type: object
-                      required: [name]
-                      properties:
-                        name: { type: string }
-                    gateway:
-                      type: object
-                      required: [parentRefs]
-                      properties:
-                        hostnames:
-                          type: array
-                          maxItems: 16
-                          items:
-                            type: string
-                            minLength: 1
-                            maxLength: 253
-                        parentRefs:
-                          type: array
-                          minItems: 1
-                          maxItems: 8
-                          items:
-                            type: object
-                            required: [name]
-                            properties:
-                              group: { type: string, maxLength: 253 }
-                              kind: { type: string, maxLength: 63 }
-                              name: { type: string, minLength: 1, maxLength: 253 }
-                              namespace: { type: string, maxLength: 63 }
-                              sectionName: { type: string, maxLength: 253 }
-                scheduling:
+                      minimum: 1024
+                      default: 100000
+                rateLimit:
                   type: object
                   properties:
-                    nodeSelector:
-                      type: object
-                      additionalProperties: { type: string }
-                    tolerations:
-                      type: array
-                      items:
-                        type: object
-                        x-kubernetes-preserve-unknown-fields: true
-                    priorityClassName: { type: string }
-                    spreadAcrossZones: { type: boolean, default: false }
-                observability:
+                    qpsPerClient:
+                      type: integer
+                      format: int32
+                      minimum: 0
+                      default: 0
+                tls:
                   type: object
                   properties:
-                    podMonitor:
+                    dot:
                       type: object
                       properties:
                         enabled: { type: boolean, default: false }
-                        interval: { type: string, default: "30s" }
-                        labels:
+                        certificateSecretRef:
                           type: object
-                          additionalProperties: { type: string }
-                networkPolicy:
-                  type: object
-                  properties:
-                    enabled: { type: boolean, default: false }
-                    additionalAllowedAPINamespaces:
-                      type: array
-                      items: { type: string }
-                zoneManagement:
-                  type: object
-                  properties:
-                    allowedNamespaces:
-                      type: array
-                      items: { type: string }
+                          required: [name]
+                          properties:
+                            name: { type: string, minLength: 1, maxLength: 253 }
+                    doh:
+                      type: object
+                      properties:
+                        enabled: { type: boolean, default: false }
+                        certificateSecretRef:
+                          type: object
+                          required: [name]
+                          properties:
+                            name: { type: string, minLength: 1, maxLength: 253 }
                 podDisruptionBudget:
                   type: object
                   properties:
@@ -240,15 +182,10 @@ spec:
               type: object
               properties:
                 phase: { type: string }
-                ready: { type: boolean }
                 dnsEndpoint: { type: string }
-                apiEndpoint: { type: string }
-                apiKeySecretName: { type: string }
-                backendSecretName: { type: string }
-                schemaApplied: { type: boolean }
                 desiredReplicas: { type: integer, format: int32 }
                 readyReplicas: { type: integer, format: int32 }
-                configHash: { type: string }
+                observedGeneration: { type: integer, format: int64 }
                 failureMessage: { type: string }
                 conditions:
                   type: array
@@ -260,5 +197,5 @@ spec:
                       status: { type: string, enum: ["True", "False", "Unknown"] }
                       reason: { type: string }
                       message: { type: string }
-                      lastTransitionTime: { type: string, format: date-time }
                       observedGeneration: { type: integer, format: int64 }
+                      lastTransitionTime: { type: string, format: date-time }
