@@ -134,6 +134,29 @@ func TestDNSDistMissingBackendNotReady(t *testing.T) {
 	}
 }
 
+func TestDNSDistDegradedWhenPodsUnavailable(t *testing.T) {
+	// The fake client leaves Deployment.Status at zero replicas, so desired > 0
+	// and available == 0 → ConditionAvailable=False and ConditionReady=False/Degraded.
+	r, c := newDNSDistReconciler(t, edgeDNSDist(), readyBackend("srv-a"))
+	key := types.NamespacedName{Name: "edge", Namespace: "default"}
+	reconcileDNSDistN(t, r, key, 2)
+
+	got := &dnsv1alpha1.DNSDist{}
+	if err := c.Get(context.Background(), key, got); err != nil {
+		t.Fatal(err)
+	}
+	readyCond := meta.FindStatusCondition(got.Status.Conditions, dnsv1alpha1.ConditionReady)
+	if readyCond == nil || readyCond.Status != metav1.ConditionFalse {
+		t.Fatalf("ConditionReady must be False when pods unavailable, got %+v", readyCond)
+	}
+	if readyCond.Reason != "Degraded" {
+		t.Errorf("ConditionReady reason must be Degraded, got %q", readyCond.Reason)
+	}
+	if meta.IsStatusConditionTrue(got.Status.Conditions, dnsv1alpha1.ConditionAvailable) {
+		t.Error("ConditionAvailable must be False when pods unavailable")
+	}
+}
+
 func TestDNSDistValidateRejectsCrossNamespaceAndBadPDB(t *testing.T) {
 	d := edgeDNSDist()
 	d.Spec.BackendRefs = []dnsv1alpha1.ObjectRef{{Name: "x", Namespace: "other"}}

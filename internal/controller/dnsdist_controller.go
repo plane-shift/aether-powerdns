@@ -71,7 +71,7 @@ func (r *DNSDistReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	setCondOn(&d.Status.Conditions, d.Generation, dnsv1alpha1.ConditionBackendsReady,
 		metav1.ConditionTrue, "BackendsReady", "all backends Ready")
 
-	// Converge children (CreateOrUpdate everywhere; steady state no-ops).
+	// Converge children. ConfigMap/Service/PDB writes are steady-state no-ops; the Deployment converge rewrites spec each pass (server updateDeployment parity — the apiserver no-ops identical canonical updates).
 	cm := manifests.DNSDistConfigMap(d)
 	if err := upsertOwned(ctx, r.Client, r.Scheme, d, &corev1.ConfigMap{}, cm.Name, cm.Namespace, func(live *corev1.ConfigMap) {
 		live.Labels = cm.Labels
@@ -331,8 +331,14 @@ func (r *DNSDistReconciler) refreshDNSDistStatus(ctx context.Context, d *dnsv1al
 	d.Status.Phase = dnsv1alpha1.ZonePhaseReady
 	d.Status.FailureMessage = ""
 	d.Status.ObservedGeneration = d.Generation
-	setCondOn(&d.Status.Conditions, d.Generation, dnsv1alpha1.ConditionReady,
-		metav1.ConditionTrue, "Reconciled", "")
+	if available {
+		setCondOn(&d.Status.Conditions, d.Generation, dnsv1alpha1.ConditionReady,
+			metav1.ConditionTrue, "Reconciled", "")
+	} else {
+		degradedMsg := fmt.Sprintf("%d/%d replicas available", dep.Status.AvailableReplicas, desired)
+		setCondOn(&d.Status.Conditions, d.Generation, dnsv1alpha1.ConditionReady,
+			metav1.ConditionFalse, "Degraded", degradedMsg)
+	}
 	if err := r.Status().Update(ctx, d); err != nil {
 		return ctrl.Result{}, err
 	}

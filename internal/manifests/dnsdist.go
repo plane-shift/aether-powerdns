@@ -165,11 +165,11 @@ func DNSDistDeployment(d *dnsv1alpha1.DNSDist, configHash string) *appsv1.Deploy
 
 	podSpec := corev1.PodSpec{
 		Containers: []corev1.Container{{
-			Name:  "dnsdist",
-			Image: image,
-			Args:  []string{"--supervised", "--disable-syslog", "-C", "/etc/dnsdist/dnsdist.conf"},
-			Ports: ports,
-			Resources: d.Spec.Resources,
+			Name:         "dnsdist",
+			Image:        image,
+			Args:         []string{"--supervised", "--disable-syslog", "-C", "/etc/dnsdist/dnsdist.conf"},
+			Ports:        ports,
+			Resources:    d.Spec.Resources,
 			VolumeMounts: mounts,
 			ReadinessProbe: &corev1.Probe{
 				ProbeHandler: corev1.ProbeHandler{
