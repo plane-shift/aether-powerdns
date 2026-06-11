@@ -25,12 +25,12 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
+	gatewayv1alpha2 "sigs.k8s.io/gateway-api/apis/v1alpha2"
 
 	dnsv1alpha1 "github.com/plane-shift/aether-powerdns/api/v1alpha1"
 	"github.com/plane-shift/aether-powerdns/internal/cnpg"
 	"github.com/plane-shift/aether-powerdns/internal/manifests"
-	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
-	gatewayv1alpha2 "sigs.k8s.io/gateway-api/apis/v1alpha2"
 )
 
 const (
@@ -112,6 +112,10 @@ func (r *PowerDNSServerReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&batchv1.Job{}).
 		Owns(&policyv1.PodDisruptionBudget{}).
 		Owns(&networkingv1.NetworkPolicy{}).
+		// Gateway API routes (TCPRoute/UDPRoute/HTTPRoute) are deliberately
+		// NOT in Owns(): their informers would hard-require the Gateway API
+		// CRDs at manager start, breaking clusters that don't install them.
+		// Route drift instead heals on the Ready-loop requeue (30s).
 		Complete(r)
 }
 
@@ -434,14 +438,14 @@ func (r *PowerDNSServerReconciler) reconcileRoutes(ctx context.Context, s *dnsv1
 			return fmt.Errorf("ensure udproute: %w", err)
 		}
 	} else {
-		if err := client.IgnoreNotFound(r.Delete(ctx, &gatewayv1alpha2.TCPRoute{
+		if err := r.deleteIfExists(ctx, &gatewayv1alpha2.TCPRoute{
 			ObjectMeta: metav1.ObjectMeta{Name: names.TCPRoute, Namespace: s.Namespace},
-		})); err != nil {
+		}); err != nil {
 			return fmt.Errorf("delete tcproute: %w", err)
 		}
-		if err := client.IgnoreNotFound(r.Delete(ctx, &gatewayv1alpha2.UDPRoute{
+		if err := r.deleteIfExists(ctx, &gatewayv1alpha2.UDPRoute{
 			ObjectMeta: metav1.ObjectMeta{Name: names.UDPRoute, Namespace: s.Namespace},
-		})); err != nil {
+		}); err != nil {
 			return fmt.Errorf("delete udproute: %w", err)
 		}
 	}
@@ -461,13 +465,23 @@ func (r *PowerDNSServerReconciler) reconcileRoutes(ctx context.Context, s *dnsv1
 				"HTTP API exposed via Gateway API HTTPRoute "+desired.Name+" — admin surface, ensure TLS at the listener")
 		}
 	} else {
-		if err := client.IgnoreNotFound(r.Delete(ctx, &gatewayv1.HTTPRoute{
+		if err := r.deleteIfExists(ctx, &gatewayv1.HTTPRoute{
 			ObjectMeta: metav1.ObjectMeta{Name: names.HTTPRoute, Namespace: s.Namespace},
-		})); err != nil {
+		}); err != nil {
 			return fmt.Errorf("delete httproute: %w", err)
 		}
 	}
 	return nil
+}
+
+// deleteIfExists removes obj only when it actually exists — the common
+// (non-gateway) path would otherwise fire blind DELETEs on every Ready
+// loop. NotFound on the Get is the steady state and costs one cheap read.
+func (r *PowerDNSServerReconciler) deleteIfExists(ctx context.Context, obj client.Object) error {
+	if err := r.Get(ctx, client.ObjectKeyFromObject(obj), obj); err != nil {
+		return client.IgnoreNotFound(err)
+	}
+	return client.IgnoreNotFound(r.Delete(ctx, obj))
 }
 
 // computeConfigHash hashes the rendered pdns.conf together with the

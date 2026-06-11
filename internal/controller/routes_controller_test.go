@@ -71,9 +71,15 @@ func TestReconcileRoutesCreatesAllThree(t *testing.T) {
 	if err := c.Get(ctx, types.NamespacedName{Name: "test-dns-tcp", Namespace: "default"}, tcp); err != nil {
 		t.Errorf("TCPRoute missing: %v", err)
 	}
+	if len(tcp.OwnerReferences) == 0 {
+		t.Error("TCPRoute must carry an owner reference for GC")
+	}
 	udp := &gatewayv1alpha2.UDPRoute{}
 	if err := c.Get(ctx, types.NamespacedName{Name: "test-dns-udp", Namespace: "default"}, udp); err != nil {
 		t.Errorf("UDPRoute missing: %v", err)
+	}
+	if len(udp.OwnerReferences) == 0 {
+		t.Error("UDPRoute must carry an owner reference for GC")
 	}
 	http := &gatewayv1.HTTPRoute{}
 	if err := c.Get(ctx, types.NamespacedName{Name: "test-api-http", Namespace: "default"}, http); err != nil {
@@ -138,6 +144,22 @@ func TestReconcileRoutesDeletesWhenDisabled(t *testing.T) {
 		err := c.Get(ctx, types.NamespacedName{Name: name, Namespace: "default"}, obj)
 		if !apierrors.IsNotFound(err) {
 			t.Errorf("%s should be deleted, got err=%v", name, err)
+		}
+	}
+}
+
+func TestReconcileRoutesNoOpWhenNeverEnabled(t *testing.T) {
+	// loadBalancer server that never had routes: repeated reconciles must
+	// stay error-free (steady state is Get→NotFound, no DELETE issued).
+	s := gatewayExposedServer()
+	s.Spec.DNS.Exposure = dnsv1alpha1.DNSExposureLoadBalancer
+	s.Spec.DNS.Gateway = nil
+	s.Spec.API.Gateway = nil
+	r, _ := newRoutesReconciler(t, s)
+	ctx := context.Background()
+	for i := 0; i < 3; i++ {
+		if err := r.reconcileRoutes(ctx, s); err != nil {
+			t.Fatalf("pass %d: %v", i+1, err)
 		}
 	}
 }
