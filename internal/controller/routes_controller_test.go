@@ -166,6 +166,8 @@ func TestReconcileRoutesNoOpWhenNeverEnabled(t *testing.T) {
 
 func TestValidateSpecAPIGateway(t *testing.T) {
 	s := gatewayExposedServer()
+	// validateSpec checks backend.type first — satisfy it so the
+	// api.gateway checks under test are actually reached.
 	s.Spec.Backend.Type = dnsv1alpha1.BackendPostgres
 
 	s.Spec.API.Gateway.ParentRefs = nil
