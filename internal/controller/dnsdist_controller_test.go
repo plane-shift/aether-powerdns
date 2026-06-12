@@ -36,6 +36,40 @@ func newDNSDistReconciler(t *testing.T, objs ...client.Object) (*DNSDistReconcil
 	return &DNSDistReconciler{Client: c, Scheme: scheme}, c
 }
 
+// readyBackendObjs returns the PowerDNSServer CR and its associated DNS
+// Service (name-dns in the same namespace, with a real ClusterIP set).
+// Both objects must be registered so the controller can Get the Service
+// when resolving backend addresses for the dnsdist config.
+func readyBackendObjs(name string) []client.Object {
+	svc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{Name: name + "-dns", Namespace: "default"},
+		Spec: corev1.ServiceSpec{
+			ClusterIP: "10.96.1." + clusterIPSuffix(name),
+		},
+	}
+	server := &dnsv1alpha1.PowerDNSServer{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default", UID: types.UID(name + "-uid")},
+		Status:     dnsv1alpha1.PowerDNSServerStatus{Phase: dnsv1alpha1.PhaseReady},
+	}
+	return []client.Object{server, svc}
+}
+
+// clusterIPSuffix assigns a deterministic last octet per backend name so
+// tests can reference the expected IP without magic numbers.
+func clusterIPSuffix(name string) string {
+	switch name {
+	case "srv-a":
+		return "10"
+	case "srv-b":
+		return "11"
+	default:
+		return "99"
+	}
+}
+
+// readyBackend keeps the old single-object form for tests that only need
+// to supply the server object (e.g. when testing the DNS-service-missing
+// error path).
 func readyBackend(name string) *dnsv1alpha1.PowerDNSServer {
 	return &dnsv1alpha1.PowerDNSServer{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default", UID: types.UID(name + "-uid")},
@@ -64,7 +98,8 @@ func reconcileDNSDistN(t *testing.T, r *DNSDistReconciler, key types.NamespacedN
 }
 
 func TestDNSDistCreatesWorkload(t *testing.T) {
-	r, c := newDNSDistReconciler(t, edgeDNSDist(), readyBackend("srv-a"))
+	objs := append([]client.Object{edgeDNSDist()}, readyBackendObjs("srv-a")...)
+	r, c := newDNSDistReconciler(t, objs...)
 	key := types.NamespacedName{Name: "edge", Namespace: "default"}
 	reconcileDNSDistN(t, r, key, 2)
 	ctx := context.Background()
@@ -73,8 +108,12 @@ func TestDNSDistCreatesWorkload(t *testing.T) {
 	if err := c.Get(ctx, types.NamespacedName{Name: "edge-dnsdist-config", Namespace: "default"}, cm); err != nil {
 		t.Fatalf("configmap: %v", err)
 	}
-	if !strings.Contains(cm.Data["dnsdist.conf"], "srv-a-dns.default.svc") {
-		t.Error("conf must carry the backend")
+	// Must use ClusterIP, NOT FQDN — dnsdist 1.9.x rejects hostnames in newServer.
+	if strings.Contains(cm.Data["dnsdist.conf"], "svc.cluster.local") {
+		t.Errorf("conf must use ClusterIP (not FQDN) for backends:\n%s", cm.Data["dnsdist.conf"])
+	}
+	if !strings.Contains(cm.Data["dnsdist.conf"], "10.96.1.10") {
+		t.Errorf("conf must carry the backend ClusterIP 10.96.1.10:\n%s", cm.Data["dnsdist.conf"])
 	}
 	dep := &appsv1.Deployment{}
 	if err := c.Get(ctx, types.NamespacedName{Name: "edge-dnsdist", Namespace: "default"}, dep); err != nil {
@@ -137,7 +176,8 @@ func TestDNSDistMissingBackendNotReady(t *testing.T) {
 func TestDNSDistDegradedWhenPodsUnavailable(t *testing.T) {
 	// The fake client leaves Deployment.Status at zero replicas, so desired > 0
 	// and available == 0 → ConditionAvailable=False and ConditionReady=False/Degraded.
-	r, c := newDNSDistReconciler(t, edgeDNSDist(), readyBackend("srv-a"))
+	objs := append([]client.Object{edgeDNSDist()}, readyBackendObjs("srv-a")...)
+	r, c := newDNSDistReconciler(t, objs...)
 	key := types.NamespacedName{Name: "edge", Namespace: "default"}
 	reconcileDNSDistN(t, r, key, 2)
 
@@ -195,7 +235,8 @@ func TestDNSDistAdditionalServicesReconcile(t *testing.T) {
 			},
 		},
 	}
-	r, c := newDNSDistReconciler(t, d, readyBackend("srv-a"))
+	objs := append([]client.Object{d}, readyBackendObjs("srv-a")...)
+	r, c := newDNSDistReconciler(t, objs...)
 	key := types.NamespacedName{Name: "edge", Namespace: "default"}
 	ctx := context.Background()
 	reconcileDNSDistN(t, r, key, 2)
@@ -262,7 +303,8 @@ func TestDNSDistTLSSecretRotationRollsDeployment(t *testing.T) {
 		},
 	}
 
-	r, c := newDNSDistReconciler(t, d, readyBackend("srv-a"), dotSecret)
+	objs := append(readyBackendObjs("srv-a"), d, dotSecret)
+	r, c := newDNSDistReconciler(t, objs...)
 	key := types.NamespacedName{Name: "edge", Namespace: "default"}
 
 	reconcileDNSDistN(t, r, key, 2)
@@ -300,7 +342,8 @@ func TestDNSDistTLSSecretRotationRollsDeployment(t *testing.T) {
 }
 
 func TestDNSDistConfChangeUpdatesConfigMap(t *testing.T) {
-	r, c := newDNSDistReconciler(t, edgeDNSDist(), readyBackend("srv-a"), readyBackend("srv-b"))
+	objs := append([]client.Object{edgeDNSDist()}, append(readyBackendObjs("srv-a"), readyBackendObjs("srv-b")...)...)
+	r, c := newDNSDistReconciler(t, objs...)
 	key := types.NamespacedName{Name: "edge", Namespace: "default"}
 	ctx := context.Background()
 	reconcileDNSDistN(t, r, key, 2)
@@ -319,8 +362,9 @@ func TestDNSDistConfChangeUpdatesConfigMap(t *testing.T) {
 	if err := c.Get(ctx, types.NamespacedName{Name: "edge-dnsdist-config", Namespace: "default"}, cm); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(cm.Data["dnsdist.conf"], "srv-b-dns.default.svc") {
-		t.Error("backend addition must converge into the live conf")
+	// After adding srv-b, its ClusterIP (10.96.1.11) must appear in the conf.
+	if !strings.Contains(cm.Data["dnsdist.conf"], "10.96.1.11") {
+		t.Errorf("backend addition must converge into the live conf (want ClusterIP 10.96.1.11):\n%s", cm.Data["dnsdist.conf"])
 	}
 	dep := &appsv1.Deployment{}
 	if err := c.Get(ctx, types.NamespacedName{Name: "edge-dnsdist", Namespace: "default"}, dep); err != nil {
@@ -328,5 +372,28 @@ func TestDNSDistConfChangeUpdatesConfigMap(t *testing.T) {
 	}
 	if dep.Spec.Template.Annotations[manifests.ConfigHashAnnotation] == "" {
 		t.Error("config-hash annotation must be set")
+	}
+}
+
+// TestDNSDistBackendServiceMissingBlocksReady verifies that when a backend
+// PowerDNSServer is Ready but its DNS Service is absent (e.g. deleted
+// accidentally), the controller sets BackendsReady=False with reason
+// "BackendServiceNotFound" instead of proceeding with an empty address.
+func TestDNSDistBackendServiceMissingBlocksReady(t *testing.T) {
+	// Only the server CR, no DNS Service.
+	r, c := newDNSDistReconciler(t, edgeDNSDist(), readyBackend("srv-a"))
+	key := types.NamespacedName{Name: "edge", Namespace: "default"}
+	reconcileDNSDistN(t, r, key, 2)
+
+	got := &dnsv1alpha1.DNSDist{}
+	if err := c.Get(context.Background(), key, got); err != nil {
+		t.Fatal(err)
+	}
+	cond := meta.FindStatusCondition(got.Status.Conditions, dnsv1alpha1.ConditionBackendsReady)
+	if cond == nil || cond.Status != metav1.ConditionFalse {
+		t.Fatalf("BackendsReady must be False when the backend DNS Service is missing: %+v", cond)
+	}
+	if cond.Reason != "BackendServiceNotFound" {
+		t.Errorf("reason must be BackendServiceNotFound, got %q", cond.Reason)
 	}
 }

@@ -57,7 +57,7 @@ func (r *DNSDistReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return r.markDNSDistFailed(ctx, d, msg)
 	}
 
-	allReady, reason, msg, err := r.backendsReady(ctx, d)
+	allReady, reason, msg, backendAddrs, err := r.backendsReady(ctx, d)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -70,7 +70,7 @@ func (r *DNSDistReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		metav1.ConditionTrue, "BackendsReady", "all backends Ready")
 
 	// Converge children. ConfigMap/Service/PDB writes are steady-state no-ops; the Deployment converge rewrites spec each pass (server updateDeployment parity — the apiserver no-ops identical canonical updates).
-	cm := manifests.DNSDistConfigMap(d)
+	cm := manifests.DNSDistConfigMap(d, backendAddrs)
 	if err := upsertOwned(ctx, r.Client, r.Scheme, d, &corev1.ConfigMap{}, cm.Name, cm.Namespace, func(live *corev1.ConfigMap) {
 		live.Labels = cm.Labels
 		live.Data = cm.Data
@@ -188,21 +188,46 @@ func validateDNSDist(d *dnsv1alpha1.DNSDist) string {
 	return ""
 }
 
-func (r *DNSDistReconciler) backendsReady(ctx context.Context, d *dnsv1alpha1.DNSDist) (bool, string, string, error) {
+// backendsReady checks that every declared backend PowerDNSServer exists,
+// is Ready, and has a resolvable DNS Service ClusterIP. When all backends
+// pass it returns (true, …, …, resolvedAddrs, nil) where resolvedAddrs is
+// a backend-name → ClusterIP map to be passed directly to
+// manifests.DNSDistConfigMap. On any failure it returns (false, reason,
+// msg, nil, nil) so the caller can set the BackendsReady condition.
+func (r *DNSDistReconciler) backendsReady(ctx context.Context, d *dnsv1alpha1.DNSDist) (bool, string, string, map[string]string, error) {
+	addrs := make(map[string]string, len(d.Spec.BackendRefs))
 	for _, ref := range d.Spec.BackendRefs {
 		s := &dnsv1alpha1.PowerDNSServer{}
 		err := r.Get(ctx, types.NamespacedName{Name: ref.Name, Namespace: d.Namespace}, s)
 		if apierrors.IsNotFound(err) {
-			return false, "BackendNotFound", fmt.Sprintf("PowerDNSServer %s/%s not found", d.Namespace, ref.Name), nil
+			return false, "BackendNotFound", fmt.Sprintf("PowerDNSServer %s/%s not found", d.Namespace, ref.Name), nil, nil
 		}
 		if err != nil {
-			return false, "", "", err
+			return false, "", "", nil, err
 		}
 		if s.Status.Phase != dnsv1alpha1.PhaseReady {
-			return false, "BackendNotReady", fmt.Sprintf("PowerDNSServer %s is %s", ref.Name, s.Status.Phase), nil
+			return false, "BackendNotReady", fmt.Sprintf("PowerDNSServer %s is %s", ref.Name, s.Status.Phase), nil, nil
 		}
+
+		// Resolve the backend's DNS Service ClusterIP. dnsdist 1.9.x rejects
+		// hostnames in newServer — only literal IPs are accepted.
+		dnsSvcName := manifests.NameSet(s).DNSService
+		svc := &corev1.Service{}
+		err = r.Get(ctx, types.NamespacedName{Name: dnsSvcName, Namespace: d.Namespace}, svc)
+		if apierrors.IsNotFound(err) {
+			return false, "BackendServiceNotFound",
+				fmt.Sprintf("DNS Service %s/%s not found for backend %s", d.Namespace, dnsSvcName, ref.Name), nil, nil
+		}
+		if err != nil {
+			return false, "", "", nil, err
+		}
+		if svc.Spec.ClusterIP == "" || svc.Spec.ClusterIP == "None" {
+			return false, "BackendServiceNotReady",
+				fmt.Sprintf("DNS Service %s/%s has no ClusterIP yet", d.Namespace, dnsSvcName), nil, nil
+		}
+		addrs[ref.Name] = svc.Spec.ClusterIP
 	}
-	return true, "", "", nil
+	return true, "", "", addrs, nil
 }
 
 // reconcileDNSDistAdditionalServices creates or updates each Service

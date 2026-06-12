@@ -24,14 +24,25 @@ func testDNSDist() *dnsv1alpha1.DNSDist {
 }
 
 func TestDNSDistConfigBackendsSortedAndHealthChecked(t *testing.T) {
-	conf := DNSDistConfig(testDNSDist())
-	ia := strings.Index(conf, `newServer({address="srv-a-dns.default.svc.cluster.local:53"`)
-	ib := strings.Index(conf, `newServer({address="srv-b-dns.default.svc.cluster.local:53"`)
-	if ia < 0 || ib < 0 {
-		t.Fatalf("backends missing:\n%s", conf)
+	// backendAddrs map: backend-name → ClusterIP (resolved by controller)
+	addrs := map[string]string{"srv-a": "10.96.0.10", "srv-b": "10.96.0.11"}
+	conf := DNSDistConfig(testDNSDist(), addrs)
+	// Must use ClusterIP, NOT the FQDN hostname (dnsdist 1.9.x rejects hostnames)
+	if strings.Contains(conf, "svc.cluster.local") {
+		t.Errorf("backend must use ClusterIP, not FQDN:\n%s", conf)
 	}
+	ia := strings.Index(conf, `newServer({address="10.96.0.10:53"`)
+	ib := strings.Index(conf, `newServer({address="10.96.0.11:53"`)
+	if ia < 0 || ib < 0 {
+		t.Fatalf("backends missing (want ClusterIPs):\n%s", conf)
+	}
+	// Sorted by NAME (srv-a before srv-b) — determinism/config-hash stability
 	if ia > ib {
-		t.Error("backends must render in sorted order (deterministic conf = stable config hash)")
+		t.Error("backends must render in sorted order by name (deterministic conf = stable config hash)")
+	}
+	// name= field must still carry the backend name for health-check labelling
+	if !strings.Contains(conf, `name="srv-a"`) || !strings.Contains(conf, `name="srv-b"`) {
+		t.Errorf("name= fields must be present:\n%s", conf)
 	}
 	if !strings.Contains(conf, "checkInterval=2") || !strings.Contains(conf, "maxCheckFailures=2") {
 		t.Error("active health-check parameters missing")
@@ -39,7 +50,7 @@ func TestDNSDistConfigBackendsSortedAndHealthChecked(t *testing.T) {
 }
 
 func TestDNSDistConfigACLOpensPublicQueries(t *testing.T) {
-	conf := DNSDistConfig(testDNSDist())
+	conf := DNSDistConfig(testDNSDist(), map[string]string{"srv-a": "10.96.0.10", "srv-b": "10.96.0.11"})
 	if !strings.Contains(conf, `setACL({"0.0.0.0/0", "::/0"})`) {
 		t.Error("dnsdist's default ACL allows only RFC1918 — a public frontend MUST setACL wide open")
 	}
@@ -47,27 +58,29 @@ func TestDNSDistConfigACLOpensPublicQueries(t *testing.T) {
 
 func TestDNSDistConfigCacheDefaultsOnAndTogglesOff(t *testing.T) {
 	d := testDNSDist()
-	conf := DNSDistConfig(d)
+	addrs := map[string]string{"srv-a": "10.96.0.10", "srv-b": "10.96.0.11"}
+	conf := DNSDistConfig(d, addrs)
 	if !strings.Contains(conf, "newPacketCache(100000") {
 		t.Errorf("cache must default on with 100000 entries:\n%s", conf)
 	}
 	off := false
 	d.Spec.Cache.Enabled = &off
-	if strings.Contains(DNSDistConfig(d), "newPacketCache") {
+	if strings.Contains(DNSDistConfig(d, addrs), "newPacketCache") {
 		t.Error("cache.enabled=false must omit the packet cache")
 	}
 }
 
 func TestDNSDistConfigRateLimitAndTLSToggles(t *testing.T) {
 	d := testDNSDist()
-	conf := DNSDistConfig(d)
+	addrs := map[string]string{"srv-a": "10.96.0.10", "srv-b": "10.96.0.11"}
+	conf := DNSDistConfig(d, addrs)
 	if strings.Contains(conf, "setQueryRate") || strings.Contains(conf, "addTLSLocal") || strings.Contains(conf, "addDOHLocal") {
 		t.Error("rate limit and TLS listeners must be off by default")
 	}
 	d.Spec.RateLimit.QPSPerClient = 50
 	d.Spec.TLS.DoT = dnsv1alpha1.DNSDistTLSListener{Enabled: true, CertificateSecretRef: corev1.LocalObjectReference{Name: "dot-cert"}}
 	d.Spec.TLS.DoH = dnsv1alpha1.DNSDistTLSListener{Enabled: true, CertificateSecretRef: corev1.LocalObjectReference{Name: "doh-cert"}}
-	conf = DNSDistConfig(d)
+	conf = DNSDistConfig(d, addrs)
 	if !strings.Contains(conf, "setQueryRate(50, 10") {
 		t.Errorf("qpsPerClient=50 must render a dynamic-block rule:\n%s", conf)
 	}
@@ -266,9 +279,10 @@ func TestDNSDistSpreadAcrossZones(t *testing.T) {
 
 func TestDNSDistConfigDeterministic(t *testing.T) {
 	d := testDNSDist()
-	first := DNSDistConfig(d)
+	addrs := map[string]string{"srv-a": "10.96.0.10", "srv-b": "10.96.0.11"}
+	first := DNSDistConfig(d, addrs)
 	for i := 0; i < 20; i++ {
-		if DNSDistConfig(d) != first {
+		if DNSDistConfig(d, addrs) != first {
 			t.Fatal("conf must render identically every time (config hash stability)")
 		}
 	}

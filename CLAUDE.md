@@ -270,13 +270,17 @@ ACL is RFC1918-only and would silently drop public queries.
 **BackendRefs**: same-namespace only; the `namespace` field on each ref must
 be empty. Duplicate `name` values are rejected by `validateDNSDist` — the
 entire CR is failed at the first duplicate found. The operator resolves each
-ref to the backing server's ClusterIP Service FQDN + port 53 (service-level
-addressing, not per-pod). Children (ConfigMap, Deployment, Service, PDB,
-routes) are only created once every backendRef resolves to a `PowerDNSServer`
-in `phase=Ready`; a missing or non-Ready backend sets `BackendsReady=False`
-and requeues without creating any child resources. After all backends are
-Ready, runtime health is delegated to dnsdist's own active health checks
-(`checkInterval=2, maxCheckFailures=2`).
+ref to the backing server's DNS Service **ClusterIP** + port 53 (resolved by
+the operator; dnsdist 1.9.x rejects hostnames in `newServer` — a Service
+recreate changes the IP, which changes the config hash, which rolls dnsdist
+automatically). The controller also checks for `BackendServiceNotFound` and
+`BackendServiceNotReady` (ClusterIP empty/None) as additional not-ready
+conditions. Children (ConfigMap, Deployment, Service, PDB, routes) are only
+created once every backendRef resolves to a `PowerDNSServer` in `phase=Ready`
+with a reachable DNS Service; a missing or non-Ready backend sets
+`BackendsReady=False` and requeues without creating any child resources.
+After all backends are Ready, runtime health is delegated to dnsdist's own
+active health checks (`checkInterval=2, maxCheckFailures=2`).
 
 **Exposure**: `spec.dns` mirrors `PowerDNSServer.spec.dns` exactly
 (`none`/`loadBalancer`/`gateway`). Gateway routes and `additionalServices`
