@@ -6,6 +6,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -70,11 +71,11 @@ func TestUpdateServiceSteadyStateIsNoOp(t *testing.T) {
 	r := &PowerDNSServerReconciler{Client: c, Scheme: scheme}
 	s := lbServer()
 
-	if err := r.updateService(context.Background(), manifests.DNSService(s)); err != nil {
+	if err := r.updateService(context.Background(), s, manifests.DNSService(s)); err != nil {
 		t.Fatalf("initial create: %v", err)
 	}
 	for i := 0; i < 3; i++ {
-		if err := r.updateService(context.Background(), manifests.DNSService(s)); err != nil {
+		if err := r.updateService(context.Background(), s, manifests.DNSService(s)); err != nil {
 			t.Fatalf("steady-state pass %d: %v", i+1, err)
 		}
 	}
@@ -90,7 +91,7 @@ func TestUpdateServicePreservesForeignFields(t *testing.T) {
 	s := lbServer()
 	ctx := context.Background()
 
-	if err := r.updateService(ctx, manifests.DNSService(s)); err != nil {
+	if err := r.updateService(ctx, s, manifests.DNSService(s)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -109,7 +110,7 @@ func TestUpdateServicePreservesForeignFields(t *testing.T) {
 	}
 
 	// Operator drift pass must keep what the LB controller wrote.
-	if err := r.updateService(ctx, manifests.DNSService(s)); err != nil {
+	if err := r.updateService(ctx, s, manifests.DNSService(s)); err != nil {
 		t.Fatal(err)
 	}
 	if err := c.Get(ctx, key, svc); err != nil {
@@ -144,12 +145,12 @@ func TestUpdateServiceRetriesOnConflict(t *testing.T) {
 	s := lbServer()
 	ctx := context.Background()
 
-	if err := r.updateService(ctx, manifests.DNSService(s)); err != nil {
+	if err := r.updateService(ctx, s, manifests.DNSService(s)); err != nil {
 		t.Fatal(err)
 	}
 	// Force a genuine change so an Update is attempted.
 	s.Spec.DNS.LoadBalancer.Annotations["metallb.io/address-pool"] = "other-pool"
-	if err := r.updateService(ctx, manifests.DNSService(s)); err != nil {
+	if err := r.updateService(ctx, s, manifests.DNSService(s)); err != nil {
 		t.Fatalf("a single conflict must be retried, not bubbled: %v", err)
 	}
 	svc := &corev1.Service{}
@@ -158,6 +159,48 @@ func TestUpdateServiceRetriesOnConflict(t *testing.T) {
 	}
 	if svc.Annotations["metallb.io/address-pool"] != "other-pool" {
 		t.Error("update lost after conflict retry")
+	}
+}
+
+// TestUpdateServiceOwnerRefOnRecreate verifies that when a Service is
+// deleted and recreated via the server's updateService wrapper, the new
+// object carries an owner reference to the PowerDNSServer (GC safety).
+func TestUpdateServiceOwnerRefOnRecreate(t *testing.T) {
+	scheme := fixesTestScheme(t)
+	c := fake.NewClientBuilder().WithScheme(scheme).Build()
+	r := &PowerDNSServerReconciler{Client: c, Scheme: scheme}
+	s := lbServer()
+	ctx := context.Background()
+
+	// Create the Service.
+	if err := r.updateService(ctx, s, manifests.DNSService(s)); err != nil {
+		t.Fatalf("initial create: %v", err)
+	}
+
+	// Simulate manual deletion.
+	svc := &corev1.Service{}
+	key := types.NamespacedName{Name: manifests.NameSet(s).DNSService, Namespace: "default"}
+	if err := c.Get(ctx, key, svc); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Delete(ctx, svc); err != nil {
+		t.Fatal(err)
+	}
+
+	// Recreate via updateService.
+	if err := r.updateService(ctx, s, manifests.DNSService(s)); err != nil {
+		t.Fatalf("recreate: %v", err)
+	}
+
+	recreated := &corev1.Service{}
+	if err := c.Get(ctx, key, recreated); err != nil {
+		t.Fatalf("recreated service: %v", err)
+	}
+	if len(recreated.OwnerReferences) == 0 {
+		t.Error("recreated Service must carry an owner reference to the PowerDNSServer")
+	}
+	if recreated.OwnerReferences[0].Name != s.Name {
+		t.Errorf("owner ref name = %q, want %q", recreated.OwnerReferences[0].Name, s.Name)
 	}
 }
 
@@ -366,5 +409,122 @@ func TestRefreshDNSEndpointTracksLBAssignment(t *testing.T) {
 	}
 	if got.Status.DNSEndpoint != "10.1.0.241:53" {
 		t.Errorf("assigned LB must restore dnsEndpoint, got %q", got.Status.DNSEndpoint)
+	}
+}
+
+// --- Fix: updateDeployment recreate path must carry owner ref (#1) ---
+
+// TestUpdateDeploymentOwnerRefOnRecreate verifies that when a Deployment is
+// deleted after provisioning and updateDeployment recreates it, the new object
+// carries a controller reference to the PowerDNSServer. Without it, GC does not
+// cascade and the watch fan-out from Owns(&Deployment{}) never fires.
+func TestUpdateDeploymentOwnerRefOnRecreate(t *testing.T) {
+	scheme := fixesTestScheme(t)
+	c := fake.NewClientBuilder().WithScheme(scheme).Build()
+	r := &PowerDNSServerReconciler{Client: c, Scheme: scheme}
+	s := lbServer()
+	ctx := context.Background()
+
+	desired := manifests.Deployment(s, "hash1")
+
+	// Initial create via updateDeployment.
+	if err := r.updateDeployment(ctx, s, desired); err != nil {
+		t.Fatalf("initial create: %v", err)
+	}
+
+	// Simulate manual deletion (e.g. runaway kubectl delete).
+	dep := &appsv1.Deployment{}
+	key := types.NamespacedName{Name: desired.Name, Namespace: desired.Namespace}
+	if err := c.Get(ctx, key, dep); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Delete(ctx, dep); err != nil {
+		t.Fatal(err)
+	}
+
+	// Recreate via updateDeployment — must carry owner ref.
+	if err := r.updateDeployment(ctx, s, manifests.Deployment(s, "hash2")); err != nil {
+		t.Fatalf("recreate: %v", err)
+	}
+	recreated := &appsv1.Deployment{}
+	if err := c.Get(ctx, key, recreated); err != nil {
+		t.Fatalf("get recreated deployment: %v", err)
+	}
+	if len(recreated.OwnerReferences) == 0 {
+		t.Error("recreated Deployment must carry an owner reference to the PowerDNSServer")
+	}
+	if recreated.OwnerReferences[0].Name != s.Name {
+		t.Errorf("owner ref name = %q, want %q", recreated.OwnerReferences[0].Name, s.Name)
+	}
+}
+
+// --- Fix: reconcileAdditionalDNSServices drift-converges spec changes (#2) ---
+
+// serverWithAdditional returns a PowerDNSServer with one additionalService entry.
+func serverWithAdditional(ann map[string]string) *dnsv1alpha1.PowerDNSServer {
+	return &dnsv1alpha1.PowerDNSServer{
+		ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "default", UID: "test-uid"},
+		Spec: dnsv1alpha1.PowerDNSServerSpec{
+			Backend: dnsv1alpha1.BackendSpec{Type: dnsv1alpha1.BackendPostgres},
+			DNS: dnsv1alpha1.DNSSpec{
+				Exposure: dnsv1alpha1.DNSExposureLoadBalancer,
+				LoadBalancer: &dnsv1alpha1.DNSLoadBalancerSpec{
+					IP: "10.1.0.241",
+					AdditionalServices: []dnsv1alpha1.AdditionalLoadBalancerService{
+						{NameSuffix: "-extra", IP: "10.1.0.250", Annotations: ann},
+					},
+				},
+			},
+		},
+	}
+}
+
+// TestReconcileAdditionalDNSServicesConvergesDrift verifies that mutating
+// spec.dns.loadBalancer.additionalServices[*] (annotations or IP) propagates
+// to the live Service. The previous ensureOwned path was create-only and
+// silently dropped every subsequent edit.
+func TestReconcileAdditionalDNSServicesConvergesDrift(t *testing.T) {
+	scheme := fixesTestScheme(t)
+	c := fake.NewClientBuilder().WithScheme(scheme).Build()
+	r := &PowerDNSServerReconciler{Client: c, Scheme: scheme}
+	ctx := context.Background()
+
+	// Pass 1: initial create.
+	s1 := serverWithAdditional(map[string]string{"metallb.io/address-pool": "pool-a"})
+	if err := r.reconcileAdditionalDNSServices(ctx, s1); err != nil {
+		t.Fatalf("first reconcile: %v", err)
+	}
+	svcKey := types.NamespacedName{Name: "test-dns-extra", Namespace: "default"}
+	svc := &corev1.Service{}
+	if err := c.Get(ctx, svcKey, svc); err != nil {
+		t.Fatalf("service not created: %v", err)
+	}
+	if svc.Annotations["metallb.io/address-pool"] != "pool-a" {
+		t.Errorf("initial annotation = %q, want pool-a", svc.Annotations["metallb.io/address-pool"])
+	}
+	// role label must be present.
+	if svc.Labels["dns.aetherplatform.cloud/role"] != "additional-dns" {
+		t.Errorf("role label missing after create, labels = %v", svc.Labels)
+	}
+	// owner ref must be set.
+	if len(svc.OwnerReferences) == 0 {
+		t.Error("Service created without owner reference")
+	}
+
+	// Pass 2: mutate annotation value — must propagate to live Service.
+	s2 := serverWithAdditional(map[string]string{"metallb.io/address-pool": "pool-b"})
+	if err := r.reconcileAdditionalDNSServices(ctx, s2); err != nil {
+		t.Fatalf("second reconcile: %v", err)
+	}
+	updated := &corev1.Service{}
+	if err := c.Get(ctx, svcKey, updated); err != nil {
+		t.Fatal(err)
+	}
+	if updated.Annotations["metallb.io/address-pool"] != "pool-b" {
+		t.Errorf("annotation not updated: got %q, want pool-b (ensureOwned was create-only)", updated.Annotations["metallb.io/address-pool"])
+	}
+	// role label must survive the drift-converge path.
+	if updated.Labels["dns.aetherplatform.cloud/role"] != "additional-dns" {
+		t.Errorf("role label lost after converge, labels = %v", updated.Labels)
 	}
 }

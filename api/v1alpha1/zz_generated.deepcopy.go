@@ -78,6 +78,10 @@ func (in *PowerDNSServerSpec) DeepCopyInto(out *PowerDNSServerSpec) {
 	in.Observability.DeepCopyInto(&out.Observability)
 	in.NetworkPolicy.DeepCopyInto(&out.NetworkPolicy)
 	in.ZoneManagement.DeepCopyInto(&out.ZoneManagement)
+	if in.PodDisruptionBudget != nil {
+		out.PodDisruptionBudget = new(PDBSpec)
+		in.PodDisruptionBudget.DeepCopyInto(out.PodDisruptionBudget)
+	}
 }
 
 func (in *SchedulingSpec) DeepCopyInto(out *SchedulingSpec) {
@@ -605,6 +609,190 @@ func (in *APIGatewaySpec) DeepCopy() *APIGatewaySpec {
 		return nil
 	}
 	out := new(APIGatewaySpec)
+	in.DeepCopyInto(out)
+	return out
+}
+
+func (in *PDBSpec) DeepCopyInto(out *PDBSpec) {
+	*out = *in
+	if in.MinAvailable != nil {
+		v := *in.MinAvailable
+		out.MinAvailable = &v
+	}
+}
+
+func (in *PDBSpec) DeepCopy() *PDBSpec {
+	if in == nil {
+		return nil
+	}
+	out := new(PDBSpec)
+	in.DeepCopyInto(out)
+	return out
+}
+
+func (in *DNSDist) DeepCopyInto(out *DNSDist) {
+	*out = *in
+	out.TypeMeta = in.TypeMeta
+	in.ObjectMeta.DeepCopyInto(&out.ObjectMeta)
+	in.Spec.DeepCopyInto(&out.Spec)
+	in.Status.DeepCopyInto(&out.Status)
+}
+
+func (in *DNSDist) DeepCopy() *DNSDist {
+	if in == nil {
+		return nil
+	}
+	out := new(DNSDist)
+	in.DeepCopyInto(out)
+	return out
+}
+
+func (in *DNSDist) DeepCopyObject() runtime.Object {
+	if c := in.DeepCopy(); c != nil {
+		return c
+	}
+	return nil
+}
+
+func (in *DNSDistList) DeepCopyInto(out *DNSDistList) {
+	*out = *in
+	out.TypeMeta = in.TypeMeta
+	in.ListMeta.DeepCopyInto(&out.ListMeta)
+	if in.Items != nil {
+		l := make([]DNSDist, len(in.Items))
+		for i := range in.Items {
+			in.Items[i].DeepCopyInto(&l[i])
+		}
+		out.Items = l
+	}
+}
+
+func (in *DNSDistList) DeepCopy() *DNSDistList {
+	if in == nil {
+		return nil
+	}
+	out := new(DNSDistList)
+	in.DeepCopyInto(out)
+	return out
+}
+
+func (in *DNSDistList) DeepCopyObject() runtime.Object {
+	if c := in.DeepCopy(); c != nil {
+		return c
+	}
+	return nil
+}
+
+func (in *DNSDistSpec) DeepCopyInto(out *DNSDistSpec) {
+	*out = *in
+	if in.Replicas != nil {
+		v := *in.Replicas
+		out.Replicas = &v
+	}
+	in.Resources.DeepCopyInto(&out.Resources)
+	in.Scheduling.DeepCopyInto(&out.Scheduling)
+	if in.BackendRefs != nil {
+		l := make([]ObjectRef, len(in.BackendRefs))
+		copy(l, in.BackendRefs)
+		out.BackendRefs = l
+	}
+	in.DNS.DeepCopyInto(&out.DNS)
+	in.Cache.DeepCopyInto(&out.Cache)
+	in.RateLimit.DeepCopyInto(&out.RateLimit)
+	in.TLS.DeepCopyInto(&out.TLS)
+	if in.PodDisruptionBudget != nil {
+		out.PodDisruptionBudget = new(PDBSpec)
+		in.PodDisruptionBudget.DeepCopyInto(out.PodDisruptionBudget)
+	}
+}
+
+func (in *DNSDistSpec) DeepCopy() *DNSDistSpec {
+	if in == nil {
+		return nil
+	}
+	out := new(DNSDistSpec)
+	in.DeepCopyInto(out)
+	return out
+}
+
+func (in *DNSDistCacheSpec) DeepCopyInto(out *DNSDistCacheSpec) {
+	*out = *in
+	if in.Enabled != nil {
+		v := *in.Enabled
+		out.Enabled = &v
+	}
+	if in.MaxEntries != nil {
+		v := *in.MaxEntries
+		out.MaxEntries = &v
+	}
+}
+
+func (in *DNSDistCacheSpec) DeepCopy() *DNSDistCacheSpec {
+	if in == nil {
+		return nil
+	}
+	out := new(DNSDistCacheSpec)
+	in.DeepCopyInto(out)
+	return out
+}
+
+func (in *DNSDistRateLimitSpec) DeepCopyInto(out *DNSDistRateLimitSpec) {
+	*out = *in
+}
+
+func (in *DNSDistRateLimitSpec) DeepCopy() *DNSDistRateLimitSpec {
+	if in == nil {
+		return nil
+	}
+	out := new(DNSDistRateLimitSpec)
+	in.DeepCopyInto(out)
+	return out
+}
+
+func (in *DNSDistTLSListener) DeepCopyInto(out *DNSDistTLSListener) {
+	*out = *in
+}
+
+func (in *DNSDistTLSListener) DeepCopy() *DNSDistTLSListener {
+	if in == nil {
+		return nil
+	}
+	out := new(DNSDistTLSListener)
+	in.DeepCopyInto(out)
+	return out
+}
+
+func (in *DNSDistTLSSpec) DeepCopyInto(out *DNSDistTLSSpec) {
+	*out = *in
+	in.DoT.DeepCopyInto(&out.DoT)
+	in.DoH.DeepCopyInto(&out.DoH)
+}
+
+func (in *DNSDistTLSSpec) DeepCopy() *DNSDistTLSSpec {
+	if in == nil {
+		return nil
+	}
+	out := new(DNSDistTLSSpec)
+	in.DeepCopyInto(out)
+	return out
+}
+
+func (in *DNSDistStatus) DeepCopyInto(out *DNSDistStatus) {
+	*out = *in
+	if in.Conditions != nil {
+		l := make([]v1.Condition, len(in.Conditions))
+		for i := range in.Conditions {
+			in.Conditions[i].DeepCopyInto(&l[i])
+		}
+		out.Conditions = l
+	}
+}
+
+func (in *DNSDistStatus) DeepCopy() *DNSDistStatus {
+	if in == nil {
+		return nil
+	}
+	out := new(DNSDistStatus)
 	in.DeepCopyInto(out)
 	return out
 }

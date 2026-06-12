@@ -8,59 +8,6 @@ import (
 	dnsv1alpha1 "github.com/plane-shift/aether-powerdns/api/v1alpha1"
 )
 
-// TCPRoute creates a single Gateway API TCPRoute for the DNS TCP port,
-// attached to every Gateway listed in spec.dns.gateway.parentRefs. Each
-// parent may specify its own TCP listener via parentRef.tcpSectionName.
-func TCPRoute(s *dnsv1alpha1.PowerDNSServer) *gatewayv1alpha2.TCPRoute {
-	names := NameSet(s)
-	parents := gatewayParents(s, gatewayProtoTCP)
-	port := gatewayv1.PortNumber(dnsTCPPort)
-	return &gatewayv1alpha2.TCPRoute{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      names.TCPRoute,
-			Namespace: s.Namespace,
-			Labels:    labels(s),
-		},
-		Spec: gatewayv1alpha2.TCPRouteSpec{
-			CommonRouteSpec: gatewayv1.CommonRouteSpec{ParentRefs: parents},
-			Rules: []gatewayv1alpha2.TCPRouteRule{{
-				BackendRefs: []gatewayv1.BackendRef{{
-					BackendObjectReference: gatewayv1.BackendObjectReference{
-						Name: gatewayv1.ObjectName(names.DNSService),
-						Port: &port,
-					},
-				}},
-			}},
-		},
-	}
-}
-
-// UDPRoute creates a single Gateway API UDPRoute for the DNS UDP port,
-// attached to every Gateway listed in spec.dns.gateway.parentRefs.
-func UDPRoute(s *dnsv1alpha1.PowerDNSServer) *gatewayv1alpha2.UDPRoute {
-	names := NameSet(s)
-	parents := gatewayParents(s, gatewayProtoUDP)
-	port := gatewayv1.PortNumber(dnsUDPPort)
-	return &gatewayv1alpha2.UDPRoute{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      names.UDPRoute,
-			Namespace: s.Namespace,
-			Labels:    labels(s),
-		},
-		Spec: gatewayv1alpha2.UDPRouteSpec{
-			CommonRouteSpec: gatewayv1.CommonRouteSpec{ParentRefs: parents},
-			Rules: []gatewayv1alpha2.UDPRouteRule{{
-				BackendRefs: []gatewayv1.BackendRef{{
-					BackendObjectReference: gatewayv1.BackendObjectReference{
-						Name: gatewayv1.ObjectName(names.DNSService),
-						Port: &port,
-					},
-				}},
-			}},
-		},
-	}
-}
-
 type gatewayProto int
 
 const (
@@ -68,15 +15,14 @@ const (
 	gatewayProtoUDP
 )
 
-// gatewayParents builds a ParentReference for each entry in
-// spec.dns.gateway.parentRefs, picking the per-protocol section name when
-// the parent declares one.
-func gatewayParents(s *dnsv1alpha1.PowerDNSServer, proto gatewayProto) []gatewayv1.ParentReference {
-	if s.Spec.DNS.Gateway == nil {
+// dnsRouteParents builds ParentReferences from a DNSSpec's gateway block —
+// shared by PowerDNSServer and DNSDist exposure (same DNSSpec type).
+func dnsRouteParents(dns *dnsv1alpha1.DNSSpec, localNS string, proto gatewayProto) []gatewayv1.ParentReference {
+	if dns.Gateway == nil {
 		return nil
 	}
-	out := make([]gatewayv1.ParentReference, 0, len(s.Spec.DNS.Gateway.ParentRefs))
-	for _, p := range s.Spec.DNS.Gateway.ParentRefs {
+	out := make([]gatewayv1.ParentReference, 0, len(dns.Gateway.ParentRefs))
+	for _, p := range dns.Gateway.ParentRefs {
 		ref := gatewayv1.ParentReference{Name: gatewayv1.ObjectName(p.Name)}
 		if p.Group != "" {
 			g := gatewayv1.Group(p.Group)
@@ -86,7 +32,7 @@ func gatewayParents(s *dnsv1alpha1.PowerDNSServer, proto gatewayProto) []gateway
 			k := gatewayv1.Kind(p.Kind)
 			ref.Kind = &k
 		}
-		if p.Namespace != "" && p.Namespace != s.Namespace {
+		if p.Namespace != "" && p.Namespace != localNS {
 			nsRef := gatewayv1.Namespace(p.Namespace)
 			ref.Namespace = &nsRef
 		}
@@ -106,6 +52,58 @@ func gatewayParents(s *dnsv1alpha1.PowerDNSServer, proto gatewayProto) []gateway
 	return out
 }
 
+// buildTCPRoute / buildUDPRoute render one route for any owner.
+func buildTCPRoute(name, namespace string, lbls map[string]string, parents []gatewayv1.ParentReference, backendSvc string, port int32) *gatewayv1alpha2.TCPRoute {
+	p := gatewayv1.PortNumber(port)
+	return &gatewayv1alpha2.TCPRoute{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace, Labels: lbls},
+		Spec: gatewayv1alpha2.TCPRouteSpec{
+			CommonRouteSpec: gatewayv1.CommonRouteSpec{ParentRefs: parents},
+			Rules: []gatewayv1alpha2.TCPRouteRule{{
+				BackendRefs: []gatewayv1.BackendRef{{
+					BackendObjectReference: gatewayv1.BackendObjectReference{
+						Name: gatewayv1.ObjectName(backendSvc), Port: &p,
+					},
+				}},
+			}},
+		},
+	}
+}
+
+func buildUDPRoute(name, namespace string, lbls map[string]string, parents []gatewayv1.ParentReference, backendSvc string, port int32) *gatewayv1alpha2.UDPRoute {
+	p := gatewayv1.PortNumber(port)
+	return &gatewayv1alpha2.UDPRoute{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace, Labels: lbls},
+		Spec: gatewayv1alpha2.UDPRouteSpec{
+			CommonRouteSpec: gatewayv1.CommonRouteSpec{ParentRefs: parents},
+			Rules: []gatewayv1alpha2.UDPRouteRule{{
+				BackendRefs: []gatewayv1.BackendRef{{
+					BackendObjectReference: gatewayv1.BackendObjectReference{
+						Name: gatewayv1.ObjectName(backendSvc), Port: &p,
+					},
+				}},
+			}},
+		},
+	}
+}
+
+// TCPRoute creates a single Gateway API TCPRoute for the DNS TCP port,
+// attached to every Gateway listed in spec.dns.gateway.parentRefs. Each
+// parent may specify its own TCP listener via parentRef.tcpSectionName.
+func TCPRoute(s *dnsv1alpha1.PowerDNSServer) *gatewayv1alpha2.TCPRoute {
+	names := NameSet(s)
+	return buildTCPRoute(names.TCPRoute, s.Namespace, labels(s),
+		dnsRouteParents(&s.Spec.DNS, s.Namespace, gatewayProtoTCP), names.DNSService, dnsTCPPort)
+}
+
+// UDPRoute creates a single Gateway API UDPRoute for the DNS UDP port,
+// attached to every Gateway listed in spec.dns.gateway.parentRefs.
+func UDPRoute(s *dnsv1alpha1.PowerDNSServer) *gatewayv1alpha2.UDPRoute {
+	names := NameSet(s)
+	return buildUDPRoute(names.UDPRoute, s.Namespace, labels(s),
+		dnsRouteParents(&s.Spec.DNS, s.Namespace, gatewayProtoUDP), names.DNSService, dnsUDPPort)
+}
+
 // HTTPRoute exposes the PowerDNS HTTP API through the Gateways listed in
 // spec.api.gateway.parentRefs. Opt-in only — the API is an admin surface
 // (a leaked key gives full zone control); pair with TLS listeners and
@@ -119,7 +117,8 @@ func HTTPRoute(s *dnsv1alpha1.PowerDNSServer) *gatewayv1.HTTPRoute {
 	api := apiSpecOrDefault(s)
 
 	parents := make([]gatewayv1.ParentReference, 0, len(gw.ParentRefs))
-	// Same construction rules as gatewayParents — keep the two in sync.
+	// Same parentRef construction as dnsRouteParents, except HTTPRoute
+	// uses the single SectionName field (no per-proto split).
 	for _, p := range gw.ParentRefs {
 		ref := gatewayv1.ParentReference{Name: gatewayv1.ObjectName(p.Name)}
 		if p.Group != "" {

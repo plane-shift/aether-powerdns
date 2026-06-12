@@ -17,5 +17,6 @@ Each file is a self-contained `kubectl apply -f`-able manifest.
 | `zone-secondary.yaml` | Secondary zone replicating from external primaries via AXFR/IXFR; RRSet resources rejected. |
 | `zone-dnssec.yaml` | DNSSEC-signed Native zone; DS records appear in `status.dsRecords` for registrar upload. |
 | `rrset-cross-namespace.yaml` | App-team namespace managing a record in a platform-owned zone via cross-namespace `zoneRef`. |
+| `dnsdist-frontend.yaml` | DNSDist frontend tier (health-checked backends, cache, rate limit) with gateway exposure pointing at dnsdist; the PowerDNSServer runs `dns.exposure: none`. |
 
 Pre-reqs vary per example — see comments at the top of each file.

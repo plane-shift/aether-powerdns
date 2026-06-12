@@ -14,7 +14,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	policyv1 "k8s.io/api/policy/v1"
-	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -22,7 +21,6 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
-	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -169,6 +167,15 @@ func validateSpec(s *dnsv1alpha1.PowerDNSServer) string {
 			if p.Name == "" {
 				return fmt.Sprintf("api.gateway.parentRefs[%d].name is required", i)
 			}
+		}
+	}
+	if pdb := s.Spec.PodDisruptionBudget; pdb != nil && pdb.MinAvailable != nil {
+		replicas := int32(1)
+		if s.Spec.Replicas != nil {
+			replicas = *s.Spec.Replicas
+		}
+		if replicas > 1 && *pdb.MinAvailable >= replicas {
+			return fmt.Sprintf("podDisruptionBudget.minAvailable (%d) must be < replicas (%d) — equal would block all drains", *pdb.MinAvailable, replicas)
 		}
 	}
 	if s.Spec.DNS.Exposure == dnsv1alpha1.DNSExposureLoadBalancer &&
@@ -390,7 +397,11 @@ func (r *PowerDNSServerReconciler) reconcileAdditionalDNSServices(ctx context.Co
 			svc.Labels = map[string]string{}
 		}
 		svc.Labels["dns.aetherplatform.cloud/role"] = "additional-dns"
-		if err := r.ensureOwned(ctx, s, svc); err != nil {
+		// Use the drift-correcting updateService wrapper (not ensureOwned) so
+		// edits to IP/annotations/externalTrafficPolicy in the spec propagate
+		// to live Services. The role label survives because it's set on the
+		// desired svc above and updateService leaves labels untouched.
+		if err := r.updateService(ctx, s, svc); err != nil {
 			return err
 		}
 		desiredNames[svc.Name] = struct{}{}
@@ -536,21 +547,7 @@ func (r *PowerDNSServerReconciler) reconcileRoutes(ctx context.Context, s *dnsv1
 	return nil
 }
 
-// deleteIfExists removes obj only when it actually exists — the common
-// (non-gateway) path would otherwise fire blind DELETEs on every Ready
-// loop. NotFound on the Get is the steady state and costs one cheap read.
-// A missing CRD (no-match) also counts as "nothing to delete": Gateway
-// API is optional, and servers that never asked for gateway exposure must
-// not fail their drift loop on clusters without the route CRDs.
-func (r *PowerDNSServerReconciler) deleteIfExists(ctx context.Context, obj client.Object) error {
-	if err := r.Get(ctx, client.ObjectKeyFromObject(obj), obj); err != nil {
-		if meta.IsNoMatchError(err) {
-			return nil
-		}
-		return client.IgnoreNotFound(err)
-	}
-	return client.IgnoreNotFound(r.Delete(ctx, obj))
-}
+// deleteIfExists — thin wrapper; implementation lives in converge.go.
 
 // computeConfigHash hashes the rendered pdns.conf together with the
 // API-key and backend Secret data, so a rotation of either secret bumps
@@ -667,10 +664,10 @@ func (r *PowerDNSServerReconciler) reconcileDrift(ctx context.Context, s *dnsv1a
 	if err := r.updateDeployment(ctx, s, manifests.Deployment(s, hash)); err != nil {
 		return err
 	}
-	if err := r.updateService(ctx, manifests.APIService(s)); err != nil {
+	if err := r.updateService(ctx, s, manifests.APIService(s)); err != nil {
 		return err
 	}
-	if err := r.updateService(ctx, manifests.DNSService(s)); err != nil {
+	if err := r.updateService(ctx, s, manifests.DNSService(s)); err != nil {
 		return err
 	}
 	if err := r.reconcileAdditionalDNSServices(ctx, s); err != nil {
@@ -933,11 +930,13 @@ func (r *PowerDNSServerReconciler) ensureUnstructured(ctx context.Context, s *dn
 	return err
 }
 
-func (r *PowerDNSServerReconciler) updateDeployment(ctx context.Context, _ *dnsv1alpha1.PowerDNSServer, desired *appsv1.Deployment) error {
+func (r *PowerDNSServerReconciler) updateDeployment(ctx context.Context, s *dnsv1alpha1.PowerDNSServer, desired *appsv1.Deployment) error {
 	existing := &appsv1.Deployment{}
 	err := r.Get(ctx, types.NamespacedName{Name: desired.Name, Namespace: desired.Namespace}, existing)
 	if apierrors.IsNotFound(err) {
-		return r.Create(ctx, desired)
+		// Use ensureOwned so the recreated Deployment carries a controller
+		// reference — without it GC and watch fan-out both break.
+		return r.ensureOwned(ctx, s, desired)
 	}
 	if err != nil {
 		return err
@@ -947,94 +946,15 @@ func (r *PowerDNSServerReconciler) updateDeployment(ctx context.Context, _ *dnsv
 	return r.Update(ctx, existing)
 }
 
-// updateService converges a Service without churning it (issue #13):
-// apiserver-assigned NodePorts and foreign annotations (LB controllers
-// like MetalLB annotate the Service too — wholesale replacement
-// ping-pongs with them forever) are preserved, a steady-state no-op
-// skips the write entirely, and genuine updates retry on
-// optimistic-concurrency conflicts instead of failing the drift pass.
-// Trade-off of the annotation merge: removing an annotation from the
-// spec no longer removes it from the live Service.
-func (r *PowerDNSServerReconciler) updateService(ctx context.Context, desired *corev1.Service) error {
-	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
-		existing := &corev1.Service{}
-		err := r.Get(ctx, types.NamespacedName{Name: desired.Name, Namespace: desired.Namespace}, existing)
-		if apierrors.IsNotFound(err) {
-			return r.Create(ctx, desired)
-		}
-		if err != nil {
-			return err
-		}
-
-		// Start from the live object so immutable/foreign fields
-		// (ClusterIP, ipFamilies, controller-added metadata) survive.
-		updated := existing.DeepCopy()
-		updated.Spec.Ports = make([]corev1.ServicePort, len(desired.Spec.Ports))
-		copy(updated.Spec.Ports, desired.Spec.Ports)
-		if desired.Spec.Type == corev1.ServiceTypeLoadBalancer || desired.Spec.Type == corev1.ServiceTypeNodePort {
-			// Keep assigned NodePorts so steady state compares equal.
-			for i := range updated.Spec.Ports {
-				if updated.Spec.Ports[i].NodePort != 0 {
-					continue
-				}
-				for _, ep := range existing.Spec.Ports {
-					if servicePortsMatch(ep, updated.Spec.Ports[i]) {
-						updated.Spec.Ports[i].NodePort = ep.NodePort
-						break
-					}
-				}
-			}
-		}
-		updated.Spec.Type = desired.Spec.Type
-		updated.Spec.Selector = desired.Spec.Selector
-		updated.Spec.LoadBalancerIP = desired.Spec.LoadBalancerIP
-		updated.Spec.ExternalTrafficPolicy = desired.Spec.ExternalTrafficPolicy
-		for k, v := range desired.Annotations {
-			if updated.Annotations == nil {
-				updated.Annotations = map[string]string{}
-			}
-			updated.Annotations[k] = v
-		}
-
-		if equality.Semantic.DeepEqual(existing.Spec, updated.Spec) &&
-			equality.Semantic.DeepEqual(existing.Annotations, updated.Annotations) {
-			return nil
-		}
-		return r.Update(ctx, updated)
-	})
-}
-
-// servicePortsMatch pairs ports by name when named, by port+protocol
-// otherwise — for carrying assigned NodePorts across re-renders.
-func servicePortsMatch(a, b corev1.ServicePort) bool {
-	if a.Name != "" || b.Name != "" {
-		return a.Name == b.Name
-	}
-	return a.Port == b.Port && a.Protocol == b.Protocol
-}
+// updateService — thin wrapper; implementation lives in converge.go.
 
 // updateConfigMap converges the rendered ConfigMap (issue #9): ensureOwned
 // is create-only, so a pdns.conf re-render used to roll the pods (via the
 // config-hash annotation) while the mounted ConfigMap kept serving stale
 // content. Steady state skips the write.
 func (r *PowerDNSServerReconciler) updateConfigMap(ctx context.Context, s *dnsv1alpha1.PowerDNSServer, desired *corev1.ConfigMap) error {
-	existing := &corev1.ConfigMap{}
-	err := r.Get(ctx, types.NamespacedName{Name: desired.Name, Namespace: desired.Namespace}, existing)
-	if apierrors.IsNotFound(err) {
+	return updateConfigMap(ctx, r.Client, desired, func() error {
 		return r.ensureOwned(ctx, s, desired)
-	}
-	if err != nil {
-		return err
-	}
-	if equality.Semantic.DeepEqual(existing.Data, desired.Data) {
-		return nil
-	}
-	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
-		if err := r.Get(ctx, types.NamespacedName{Name: desired.Name, Namespace: desired.Namespace}, existing); err != nil {
-			return err
-		}
-		existing.Data = desired.Data
-		return r.Update(ctx, existing)
 	})
 }
 

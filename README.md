@@ -17,11 +17,33 @@ imperatively are never overwritten.
 - [Architecture](docs/architecture.md) — owned resources, reconciler design, trade-offs
 - [Examples index](examples/README.md) — ready-to-apply scenarios
 
+## DNSDist frontend tier
+
+A `DNSDist` resource deploys a [dnsdist](https://dnsdist.org) load-balancer
+tier in front of one or more `PowerDNSServer` backends in the same namespace.
+dnsdist health-checks each backend and stops routing to unhealthy replicas —
+combined with a `replicas: 2` `PowerDNSServer` this gives automatic failover
+within seconds during a single-pod failure (with `checkInterval=2,
+maxCheckFailures=2` a dead backend is marked down in ~4 s; in-flight queries
+during that window may be lost). The tier also provides a
+configurable packet cache (reduces backend load for repeated queries), per-
+client rate limiting (drops abusive clients before queries reach PowerDNS),
+and optional DNS-over-TLS / DNS-over-HTTPS termination. When a `DNSDist` is
+in use, expose the gateway or LoadBalancer on the `DNSDist` and run the
+`PowerDNSServer` with `dns.exposure: none` — the servers become internal
+infrastructure unreachable from outside the cluster.
+
+See [`examples/dnsdist-frontend.yaml`](examples/dnsdist-frontend.yaml) for a
+ready-to-apply two-document manifest, and the
+[`DNSDist` section of the configuration reference](docs/configuration.md#dnsdist)
+for the full field table and v1 limitations.
+
 ## CRDs
 
-Three namespaced CRDs in group `dns.aetherplatform.cloud`:
+Four namespaced CRDs in group `dns.aetherplatform.cloud`:
 
 - `PowerDNSServer` (short name `pdns`) — server lifecycle
+- `DNSDist` (short name `ddist`) — dnsdist frontend tier (load balancer, cache, rate limit, optional DoT/DoH)
 - `Zone` — declarative zone management
 - `RRSet` — declarative record management (type is a spec field; covers all RFC types)
 

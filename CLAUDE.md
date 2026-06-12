@@ -11,7 +11,9 @@ Always use Superpowers skills for this project. Begin every task by invoking
 
 Operator owns the PowerDNS server lifecycle (provisioning, config,
 exposure, API key) **plus declarative zone/record management** via two
-CRDs: `Zone` and one generic `RRSet` (the record type is a spec field).
+CRDs: `Zone` and one generic `RRSet` (the record type is a spec field),
+**plus a `DNSDist` frontend tier** (active-health-checked DNS load
+balancer with packet cache, rate limiting, and optional DoT/DoH).
 Do NOT add per-record-type CRDs — ~50 kinds would reinvent the PowerDNS
 API; that decision stands. Reconciliation is patch-only/coexist: only
 CR-declared rrsets are ever written, so managing records via the
@@ -168,6 +170,9 @@ Gateway route types are deliberately NOT in `Owns()` — their informers would
 hard-require the Gateway API CRDs at manager start; drift heals on the
 30s requeue instead.
 
+When a `DNSDist` fronts the server, gateway/LB exposure moves entirely to the
+`DNSDist`; the `PowerDNSServer` runs `dns.exposure: none` (see `## DNSDist`).
+
 ## Observability
 
 `spec.observability.podMonitor.enabled=true` creates a `PodMonitor`
@@ -248,6 +253,47 @@ admin/scrape paths.
   (TCPRoute/UDPRoute aren't in standard); the operator tolerates missing
   route CRDs (IsNoMatchError → skip deletes, clear error on ensure).
 
+## DNSDist
+
+`DNSDist` CRD (`dns.aetherplatform.cloud/v1alpha1`, short name `ddist`).
+Single-pass reconciler — no phase machine, no finalizer (owned resources are
+GC'd by owner-reference cascade). All generated resource names are prefixed
+`<name>-dnsdist*`.
+
+**Lua config** is deterministically rendered: backends are sorted
+alphabetically by PowerDNSServer name before emitting `newServer()` calls.
+This ensures the rendered ConfigMap is identical across reconcile passes so
+the config-hash annotation is stable and rolling restarts are not triggered
+spuriously. `setACL({"0.0.0.0/0", "::/0"})` is mandatory — dnsdist's default
+ACL is RFC1918-only and would silently drop public queries.
+
+**BackendRefs**: same-namespace only; the `namespace` field on each ref must
+be empty. Duplicate `name` values are rejected by `validateDNSDist` — the
+entire CR is failed at the first duplicate found. The operator resolves each
+ref to the backing server's ClusterIP Service FQDN + port 53 (service-level
+addressing, not per-pod). Children (ConfigMap, Deployment, Service, PDB,
+routes) are only created once every backendRef resolves to a `PowerDNSServer`
+in `phase=Ready`; a missing or non-Ready backend sets `BackendsReady=False`
+and requeues without creating any child resources. After all backends are
+Ready, runtime health is delegated to dnsdist's own active health checks
+(`checkInterval=2, maxCheckFailures=2`).
+
+**Exposure**: `spec.dns` mirrors `PowerDNSServer.spec.dns` exactly
+(`none`/`loadBalancer`/`gateway`). Gateway routes and `additionalServices`
+target the `<name>-dnsdist-dns` Service (the dnsdist pod selector), NOT the
+backing pdns Services. The backing `PowerDNSServer` resources MUST run
+`dns.exposure: none` — exposing both sides results in clients potentially
+bypassing dnsdist.
+
+**PDB**: rendered by `pdbFor` (shared helper). Default `minAvailable =
+replicas - 1`. No PDB when `replicas <= 1`. `spec.podDisruptionBudget.
+minAvailable` is validated: must be ≥ 1 and < replicas (equal-to-replicas
+blocks all voluntary disruptions and is rejected).
+
+**PowerDNS readiness probe** (added alongside DNSDist): pdns pods now use an
+`exec` probe (`pdns_control rping`) instead of a plain TCP check. Confirms
+the control socket is live, not just the port. Liveness stays TCP.
+
 ## Out of scope (do not add without asking)
 
 - Per-record-type CRDs (A/AAAA/MX/… as separate kinds) — the generic
@@ -256,5 +302,21 @@ admin/scrape paths.
 - MySQL backend — the field is reserved (`backend.type=mysql`) but the
   reconciler rejects it. Don't wire it in without confirming the user
   still wants it; Postgres-via-CNPG matches the rest of the Aether stack.
-- DNS-over-TLS / DoH — PowerDNS Auth doesn't serve those; that would mean
-  bringing in `dnsdist`, which is a separate operator concern.
+- **DNSDist is now IN scope** (see `## DNSDist` above). The following
+  dnsdist capabilities are deferred — do not add without asking:
+  - **Proxy-protocol client IP preservation** — dnsdist can forward the
+    original client IP to PowerDNS via PROXY protocol, but that requires
+    PowerDNS to be configured to accept it; deferred to v2.
+  - **Per-pod backend discovery** — current addressing is service-level
+    (ClusterIP), not per-pod. Pod-level discovery (e.g. via Endpoints
+    watch) is deferred.
+  - **Cross-namespace backends** — `backendRefs[].namespace` is rejected;
+    same-namespace only in v1.
+  - **Recursor support** — dnsdist can front a PowerDNS Recursor too, but
+    the operator only manages authoritative servers; recursor is a
+    different concern.
+  - **dnsdist console / controlSocket** — exposing the dnsdist Lua console
+    or control socket via the operator is not planned.
+  - **DoT/DoH via gateway listeners** — TLS ports are on the Service only
+    in v1; route-based exposure via dedicated Gateway TCPRoute listeners
+    (port 853) requires Gateway-side listener changes and is deferred.
