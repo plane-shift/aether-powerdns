@@ -399,8 +399,8 @@ func (r *PowerDNSServerReconciler) reconcileAdditionalDNSServices(ctx context.Co
 		svc.Labels["dns.aetherplatform.cloud/role"] = "additional-dns"
 		// Use the drift-correcting updateService wrapper (not ensureOwned) so
 		// edits to IP/annotations/externalTrafficPolicy in the spec propagate
-		// to live Services. The role label survives because updateService merges
-		// annotations and the desired svc already carries it above.
+		// to live Services. The role label survives because it's set on the
+		// desired svc above and updateService leaves labels untouched.
 		if err := r.updateService(ctx, s, svc); err != nil {
 			return err
 		}
