@@ -277,7 +277,9 @@ automatically). The controller also checks for `BackendServiceNotFound` and
 `BackendServiceNotReady` (ClusterIP empty/None) as additional not-ready
 conditions. Children (ConfigMap, Deployment, Service, PDB, routes) are only
 created once every backendRef resolves to a `PowerDNSServer` in `phase=Ready`
-with a reachable DNS Service; a missing or non-Ready backend sets
+with a DNS Service holding a resolvable (non-empty, non-None) ClusterIP —
+presence of the IP is what's checked, not network reachability; a missing
+or non-Ready backend sets
 `BackendsReady=False` and requeues without creating any child resources.
 After all backends are Ready, runtime health is delegated to dnsdist's own
 active health checks (`checkInterval=2, maxCheckFailures=2`).
