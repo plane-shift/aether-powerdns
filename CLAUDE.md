@@ -252,6 +252,16 @@ admin/scrape paths.
 - Gateway exposure needs the Gateway API EXPERIMENTAL channel
   (TCPRoute/UDPRoute aren't in standard); the operator tolerates missing
   route CRDs (IsNoMatchError → skip deletes, clear error on ensure).
+- Rendered config consumed by a third-party binary (dnsdist Lua,
+  pdns.conf) MUST be smoke-tested against the real image before tagging —
+  fake-client suites validate shape, not semantics (the v0.3.1 lesson:
+  dnsdist 1.9 rejects hostnames in `newServer`; every unit test passed,
+  only the live e2e caught it). Same class as the CEL cost-budget rule.
+- In-cluster DNS debugging: `kubectl exec <pdns-pod> -- sdig <ip> 53
+  <name> <type>` — the pdns image ships sdig; PSS-restricted alpine debug
+  pods can't `apk add` dig (non-root). PDB refusal e2e: issue two
+  evictions back-to-back in one script — replacement pods go Ready too
+  fast to catch the `disruptionsAllowed=0` window any other way.
 
 ## DNSDist
 
@@ -283,6 +293,12 @@ or non-Ready backend sets
 `BackendsReady=False` and requeues without creating any child resources.
 After all backends are Ready, runtime health is delegated to dnsdist's own
 active health checks (`checkInterval=2, maxCheckFailures=2`).
+
+**Known failure mode (#21)**: a dnsdist pod can go UDP-deaf while TCP stays
+up (node datapath flake, seen once on dev after eviction churn) — readiness
+is TCP:53 so the pod stays Ready and silently eats ~1/N of UDP traffic.
+Detect with per-pod `sdig <podIP> 53 …`; fix by deleting the pod. The
+deferred v2 item is a UDP-aware exec self-probe.
 
 **Exposure**: `spec.dns` mirrors `PowerDNSServer.spec.dns` exactly
 (`none`/`loadBalancer`/`gateway`). Gateway routes and `additionalServices`
