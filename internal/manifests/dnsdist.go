@@ -59,8 +59,18 @@ func dnsdistReplicas(d *dnsv1alpha1.DNSDist) int32 {
 }
 
 // DNSDistConfig renders dnsdist.conf (Lua). Deterministic: backends are
-// sorted so the config hash is stable across reconciles.
-func DNSDistConfig(d *dnsv1alpha1.DNSDist) string {
+// sorted by name so the config hash is stable across reconciles.
+//
+// backendAddrs maps each backend name to its DNS Service ClusterIP,
+// resolved by the controller before calling this function. dnsdist 1.9.x
+// rejects hostnames in newServer ("Unable to convert presentation address"),
+// so we emit the literal IP. A Service recreate changes the ClusterIP,
+// which changes the rendered conf, which changes the config-hash annotation,
+// which rolls the dnsdist Deployment — no manual intervention needed.
+//
+// Per-pod discovery (v2) is not implemented here; this is service-level
+// addressing.
+func DNSDistConfig(d *dnsv1alpha1.DNSDist, backendAddrs map[string]string) string {
 	var b strings.Builder
 	b.WriteString("-- managed by aether-powerdns\n")
 	// dnsdist's DEFAULT ACL allows only RFC1918 — a public frontend
@@ -74,11 +84,9 @@ func DNSDistConfig(d *dnsv1alpha1.DNSDist) string {
 	}
 	sort.Strings(names)
 	for _, n := range names {
-		// Backend = the server's DNS Service FQDN (v1: service-level
-		// addressing; per-pod discovery is v2). Active health checks
-		// with fast up/down.
-		fmt.Fprintf(&b, `newServer({address="%s-dns.%s.svc.cluster.local:53", name="%s", checkInterval=2, maxCheckFailures=2, rise=1})`+"\n",
-			n, d.Namespace, n)
+		ip := backendAddrs[n]
+		fmt.Fprintf(&b, `newServer({address="%s:53", name="%s", checkInterval=2, maxCheckFailures=2, rise=1})`+"\n",
+			ip, n)
 	}
 
 	if d.Spec.Cache.Enabled == nil || *d.Spec.Cache.Enabled {
@@ -106,11 +114,12 @@ func DNSDistConfig(d *dnsv1alpha1.DNSDist) string {
 }
 
 // DNSDistConfigMap wraps the rendered conf.
-func DNSDistConfigMap(d *dnsv1alpha1.DNSDist) *corev1.ConfigMap {
+// backendAddrs is the backend-name → ClusterIP map resolved by the controller.
+func DNSDistConfigMap(d *dnsv1alpha1.DNSDist, backendAddrs map[string]string) *corev1.ConfigMap {
 	names := DNSDistNameSet(d)
 	return &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{Name: names.ConfigMap, Namespace: d.Namespace, Labels: dnsdistLabels(d)},
-		Data:       map[string]string{"dnsdist.conf": DNSDistConfig(d)},
+		Data:       map[string]string{"dnsdist.conf": DNSDistConfig(d, backendAddrs)},
 	}
 }
 

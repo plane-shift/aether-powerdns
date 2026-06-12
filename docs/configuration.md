@@ -328,8 +328,9 @@ spec:
 Each entry must name a `PowerDNSServer` in the same namespace — cross-
 namespace backend references are not supported in v1. Duplicate `name`
 values are rejected at reconcile time. The operator resolves each ref to
-the server's DNS Service FQDN and its port 53 at reconcile time (service-
-level backend addressing, not per-pod).
+the backend's DNS Service ClusterIP (resolved by the operator at reconcile
+time; a Service recreate changes the ClusterIP, which rolls dnsdist via the
+config hash) and its port 53 — service-level addressing, not per-pod.
 
 ```yaml
 backendRefs:
@@ -347,8 +348,10 @@ rate limiting, and gateway exposure).
 
 - **Same-namespace backends only.** Cross-namespace `backendRefs` are not
   supported; the `namespace` field on each ref must be empty.
-- **Service-level backend addressing.** Backends are addressed by their
-  ClusterIP Service FQDN (one address per `PowerDNSServer`), not per-pod.
+- **Service-level backend addressing.** Backends are addressed by the
+  backend Service's ClusterIP (resolved by the operator; a Service recreate
+  changes the IP, which rolls dnsdist via the config hash). dnsdist 1.9.x
+  rejects hostnames in `newServer`, so the operator resolves to a literal IP.
   Per-pod discovery is deferred to a future release.
 - **DoT/DoH ports on the Service only.** When `tls.dot` or `tls.doh` is
   enabled the ports (853/443) are added to the dnsdist ClusterIP Service,
