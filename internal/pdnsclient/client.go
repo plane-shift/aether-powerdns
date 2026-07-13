@@ -138,6 +138,10 @@ func (c *Client) do(ctx context.Context, method, path string, in, out any) error
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		body := strings.TrimSpace(string(msg))
+		// Conflict detection lives in the shared transport, so ErrAlreadyExists
+		// can surface from any call; only CreateZone's caller acts on it (to
+		// adopt). Other callers treat it as an ordinary error, so a stray 409
+		// elsewhere degrades to the same not-ready outcome — no behaviour change.
 		if resp.StatusCode == http.StatusConflict || isAlreadyExists(body) {
 			return fmt.Errorf("%w: %s %s: %s", ErrAlreadyExists, method, path, body)
 		}

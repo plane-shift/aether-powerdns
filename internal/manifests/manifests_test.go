@@ -167,18 +167,18 @@ func TestDeploymentReadinessProbeIsDNSCheck(t *testing.T) {
 	}
 	// The default 1s timeout dropped a busy-but-serving pdns from endpoints
 	// under load (aether-powerdns#24) — the exec forks pdns_control, so it
-	// needs real headroom.
-	if rp.TimeoutSeconds < 3 {
-		t.Errorf("readiness TimeoutSeconds = %d, want >=3 (exec probe needs headroom)", rp.TimeoutSeconds)
+	// needs real headroom. Assert the exact contract, not a floor.
+	if rp.TimeoutSeconds != 5 {
+		t.Errorf("readiness TimeoutSeconds = %d, want 5 (exec probe needs headroom)", rp.TimeoutSeconds)
 	}
 	lp := dep.Spec.Template.Spec.Containers[0].LivenessProbe
 	if lp == nil || lp.TCPSocket == nil {
-		t.Errorf("liveness stays TCP, got %+v", lp)
+		t.Fatalf("liveness stays TCP, got %+v", lp)
 	}
 	// Killing must require sustained failure — a transient stall must not
 	// restart-loop a pod that still serves DNS (aether-powerdns#24).
-	if lp.TimeoutSeconds < 3 || lp.FailureThreshold < 3 {
-		t.Errorf("liveness must be lenient: TimeoutSeconds=%d FailureThreshold=%d, want >=3 each",
+	if lp.TimeoutSeconds != 5 || lp.FailureThreshold != 6 {
+		t.Errorf("liveness must be lenient: TimeoutSeconds=%d FailureThreshold=%d, want 5 and 6",
 			lp.TimeoutSeconds, lp.FailureThreshold)
 	}
 }
