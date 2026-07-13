@@ -31,6 +31,7 @@ type fakePDNS struct {
 	keys      map[string][]pdnsclient.Cryptokey        // zone -> keys
 	nextKeyID int
 	failNextPatch bool // when set, the next PATCH returns 500 and clears the flag
+	failNextGet   bool // when set, the next zone GET 404s even if it exists (models the zombie-write race)
 }
 
 func newFakePDNS(t *testing.T) *fakePDNS {
@@ -68,6 +69,13 @@ func (f *fakePDNS) handle(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, `{"error":"Nameservers list must be given"}`, http.StatusUnprocessableEntity)
 			return
 		}
+		if _, exists := f.zones[z.Name]; exists {
+			// pdns leaks the Postgres constraint violation when a racing
+			// create slips past its own existence check (the zombie write).
+			http.Error(w, `{"error":"Database error trying to insert new domain '`+z.Name+
+				`': duplicate key value violates unique constraint \"name_index\""}`, http.StatusInternalServerError)
+			return
+		}
 		z.ID, z.Serial = z.Name, 1
 		f.zones[z.Name] = z
 		f.rrsets[z.Name] = map[string]pdnsclient.RRSet{}
@@ -83,6 +91,12 @@ func (f *fakePDNS) handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	z, ok := f.zones[zoneName]
+	if len(parts) == 1 && r.Method == http.MethodGet && f.failNextGet {
+		// Model the race: a committed zone that this GET nonetheless misses.
+		f.failNextGet = false
+		w.WriteHeader(http.StatusNotFound)
+		return
+	}
 	if !ok {
 		w.WriteHeader(http.StatusNotFound)
 		return

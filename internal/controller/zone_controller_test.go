@@ -125,6 +125,34 @@ func TestZoneSeedsSOAOnCreate(t *testing.T) {
 	}
 }
 
+// TestZoneAdoptsExistingOnDuplicateCreate covers the zombie-write race
+// (aether-powerdns#24): an earlier create committed the domain server-side
+// but timed out client-side, so GetZone misses it yet the create POST hits
+// the unique constraint. The reconciler must ADOPT the existing zone and go
+// Ready — not loop on duplicate-key (that retry storm wedged pdns and took
+// dev DNS down).
+func TestZoneAdoptsExistingOnDuplicateCreate(t *testing.T) {
+	f := newFakePDNS(t)
+	server, secret := readyServer("pdns", "dns", f)
+	zone := basicZone("dns")
+	// The zone already exists in pdns (committed by the timed-out create)...
+	f.seedZone("example.com.", "Native")
+	// ...but the reconciler's first GetZone misses it, forcing the create path.
+	f.failNextGet = true
+	r, c := newZoneReconciler(t, server, secret, zone)
+	key := types.NamespacedName{Name: "example-com", Namespace: "dns"}
+
+	reconcileZoneN(t, r, key, 3)
+
+	z := getZone(t, c, key)
+	if z.Status.Phase != dnsv1alpha1.ZonePhaseReady {
+		t.Errorf("phase = %q, want Ready (adopt on duplicate; conditions: %+v)", z.Status.Phase, z.Status.Conditions)
+	}
+	if !meta.IsStatusConditionTrue(z.Status.Conditions, dnsv1alpha1.ConditionRegistered) {
+		t.Error("Registered should be True after adopting the existing zone")
+	}
+}
+
 func TestZoneServerNotFound(t *testing.T) {
 	zone := basicZone("dns")
 	r, c := newZoneReconciler(t, zone)
