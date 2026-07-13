@@ -329,6 +329,13 @@ func Deployment(s *dnsv1alpha1.PowerDNSServer, configHash string) *appsv1.Deploy
 					},
 					InitialDelaySeconds: 5,
 					PeriodSeconds:       5,
+					// The default 1s timeout dropped a busy-but-serving pdns
+					// from endpoints under load and took DNS down
+					// (aether-powerdns#24). The exec forks pdns_control, so
+					// give it real headroom; require sustained failure before
+					// pulling the single serving pod out of rotation.
+					TimeoutSeconds:   5,
+					FailureThreshold: 3,
 				},
 				LivenessProbe: &corev1.Probe{
 					ProbeHandler: corev1.ProbeHandler{
@@ -336,6 +343,11 @@ func Deployment(s *dnsv1alpha1.PowerDNSServer, configHash string) *appsv1.Deploy
 					},
 					InitialDelaySeconds: 30,
 					PeriodSeconds:       10,
+					// Be very reluctant to KILL: a transient control-plane
+					// stall must not restart-loop a pod that still serves DNS
+					// (aether-powerdns#24). ~60s of sustained failure first.
+					TimeoutSeconds:   5,
+					FailureThreshold: 6,
 				},
 			},
 		},

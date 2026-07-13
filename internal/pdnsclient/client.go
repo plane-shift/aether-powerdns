@@ -28,6 +28,21 @@ var ErrNotFound = errors.New("pdns: not found")
 // not-yet-ready server.
 var ErrUnreachable = errors.New("pdns: unreachable")
 
+// ErrAlreadyExists is returned when a create conflicts with an existing
+// object — a clean PowerDNS 409, OR a raw Postgres duplicate-key 500 that
+// slips past pdns's own existence check when a create commits server-side
+// but times out client-side (the zombie-write race, aether-powerdns#24).
+// Callers make the create idempotent by adopting the existing object.
+var ErrAlreadyExists = errors.New("pdns: already exists")
+
+// isAlreadyExists spots a "this object already exists" response body,
+// whether pdns phrased it ("... already exists") or leaked the Postgres
+// constraint violation ("duplicate key value violates unique constraint").
+func isAlreadyExists(body string) bool {
+	b := strings.ToLower(body)
+	return strings.Contains(b, "already exists") || strings.Contains(b, "duplicate key")
+}
+
 // Client talks to one PowerDNS server's HTTP API.
 type Client struct {
 	baseURL string
@@ -122,7 +137,11 @@ func (c *Client) do(ctx context.Context, method, path string, in, out any) error
 	}
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return fmt.Errorf("pdns: %s %s: %s: %s", method, path, resp.Status, strings.TrimSpace(string(msg)))
+		body := strings.TrimSpace(string(msg))
+		if resp.StatusCode == http.StatusConflict || isAlreadyExists(body) {
+			return fmt.Errorf("%w: %s %s: %s", ErrAlreadyExists, method, path, body)
+		}
+		return fmt.Errorf("pdns: %s %s: %s: %s", method, path, resp.Status, body)
 	}
 	if out != nil {
 		return json.NewDecoder(resp.Body).Decode(out)

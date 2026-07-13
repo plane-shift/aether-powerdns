@@ -101,6 +101,14 @@ func (r *ZoneReconciler) reconcileZone(ctx context.Context, zone *dnsv1alpha1.Zo
 	pz, err := pc.GetZone(ctx, zone.Spec.ZoneName)
 	if errors.Is(err, pdnsclient.ErrNotFound) {
 		pz, err = r.createZone(ctx, zone, pc)
+		if errors.Is(err, pdnsclient.ErrAlreadyExists) {
+			// The create raced an earlier one that committed server-side but
+			// timed out client-side (zombie write), so GetZone missed it yet
+			// the INSERT hit the constraint. Adopt the now-existing zone
+			// instead of looping on duplicate-key forever — that retry storm
+			// wedged pdns and took DNS down once (aether-powerdns#24).
+			pz, err = pc.GetZone(ctx, zone.Spec.ZoneName)
+		}
 	}
 	if err != nil {
 		setCondOn(&zone.Status.Conditions, zone.Generation, dnsv1alpha1.ConditionRegistered,

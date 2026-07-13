@@ -51,6 +51,29 @@ func TestGetZoneNotFound(t *testing.T) {
 	}
 }
 
+func TestCreateZoneAlreadyExists409(t *testing.T) {
+	c := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, `{"error":"Conflict - Domain 'example.com.' already exists"}`, http.StatusConflict)
+	})
+	_, err := c.CreateZone(context.Background(), &Zone{Name: "example.com.", Nameservers: []string{}})
+	if !errors.Is(err, ErrAlreadyExists) {
+		t.Fatalf("want ErrAlreadyExists for 409, got %v", err)
+	}
+}
+
+func TestCreateZoneDuplicateKey500(t *testing.T) {
+	// pdns can leak the raw Postgres constraint violation as a 500 when a
+	// racing create slips past its own existence check (the zombie write) —
+	// it must still be recognized as already-exists so the caller can adopt.
+	c := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, `{"error":"Database error trying to insert new domain 'example.com.': duplicate key value violates unique constraint \"name_index\""}`, http.StatusInternalServerError)
+	})
+	_, err := c.CreateZone(context.Background(), &Zone{Name: "example.com.", Nameservers: []string{}})
+	if !errors.Is(err, ErrAlreadyExists) {
+		t.Fatalf("want ErrAlreadyExists for duplicate-key 500, got %v", err)
+	}
+}
+
 func TestCreateZoneSendsNameserversField(t *testing.T) {
 	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost || r.URL.Path != "/api/v1/servers/localhost/zones" {
