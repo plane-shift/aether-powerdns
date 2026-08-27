@@ -76,6 +76,32 @@ attached to a Gateway you supply via `dns.gateway.parentRefs`. Optionally,
 (`<server>-api-http`) — useful for reaching the API through a TLS listener
 on the same Gateway. Independent of `dns.exposure`.
 
+## Extra pdns.conf settings
+
+`spec.extraSettings` (map of string → string) appends arbitrary
+`key=value` lines to `pdns.conf`, sorted by key, after the operator's
+managed block. Settings the operator owns (`launch`, `local-*`,
+`webserver*`, `api`, `api-key`, `default-soa-content`, `gpgsql-*`) are
+rejected. Any change rolls the pods, because PowerDNS does not reload its
+config at runtime.
+
+The main use is a **hidden primary**: an external nameserver holds the
+registrar's NS delegation and pulls the zone by AXFR, while this server is
+never queried directly.
+
+```yaml
+spec:
+  extraSettings:
+    primary: "yes"                        # serve AXFR + send NOTIFY
+    allow-axfr-ips: "104.218.120.85/32"   # the external secondary only
+```
+
+Pair it with a `Zone` of `kind: Primary`; NOTIFY is sent to the zone's own
+NS records, so a secondary that is not named in the zone additionally
+needs `also-notify`. Full walkthrough in
+[docs/configuration.md](docs/configuration.md#extrasettings--arbitrary-pdnsconf-settings)
+and [examples/hidden-primary.yaml](examples/hidden-primary.yaml).
+
 ## Zones and records
 
 `Zone` and `RRSet` resources let you manage DNS declaratively alongside the

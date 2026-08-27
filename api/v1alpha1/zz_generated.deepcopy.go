@@ -82,6 +82,13 @@ func (in *PowerDNSServerSpec) DeepCopyInto(out *PowerDNSServerSpec) {
 		out.PodDisruptionBudget = new(PDBSpec)
 		in.PodDisruptionBudget.DeepCopyInto(out.PodDisruptionBudget)
 	}
+	if in.ExtraSettings != nil {
+		m := make(map[string]string, len(in.ExtraSettings))
+		for k, v := range in.ExtraSettings {
+			m[k] = v
+		}
+		out.ExtraSettings = m
+	}
 }
 
 func (in *SchedulingSpec) DeepCopyInto(out *SchedulingSpec) {

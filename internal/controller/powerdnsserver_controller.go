@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"reflect"
 	"strings"
@@ -190,6 +191,9 @@ func validateSpec(s *dnsv1alpha1.PowerDNSServer) string {
 			}
 			seen[e.NameSuffix] = struct{}{}
 		}
+	}
+	if msgs := manifests.ValidateExtraSettings(s.Spec.ExtraSettings); len(msgs) > 0 {
+		return "invalid extraSettings: " + strings.Join(msgs, "; ")
 	}
 	return ""
 }
@@ -634,6 +638,17 @@ func (r *PowerDNSServerReconciler) phaseExposingDNS(ctx context.Context, s *dnsv
 }
 
 func (r *PowerDNSServerReconciler) phaseReady(ctx context.Context, s *dnsv1alpha1.PowerDNSServer) (ctrl.Result, error) {
+	// A spec edited AFTER the server reached Ready never re-enters
+	// phasePending, so validateSpec never sees it. The renderer drops
+	// rejected extraSettings entries (see manifests.ValidateExtraSettings)
+	// — surface that here instead of letting it pass silently. Not
+	// setFailed: that phase is terminal and would take a live DNS
+	// server's reconcile loop offline over a config typo.
+	if msgs := manifests.ValidateExtraSettings(s.Spec.ExtraSettings); len(msgs) > 0 {
+		msg := "extraSettings entries rejected and NOT rendered into pdns.conf: " + strings.Join(msgs, "; ")
+		log.FromContext(ctx).Error(errors.New(msg), "invalid spec.extraSettings")
+		r.event(s, corev1.EventTypeWarning, "ExtraSettingsRejected", msg)
+	}
 	if err := r.reconcileDrift(ctx, s); err != nil {
 		return ctrl.Result{}, err
 	}

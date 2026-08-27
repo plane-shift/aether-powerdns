@@ -4,7 +4,9 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"regexp"
 	"sort"
+	"strings"
 
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
@@ -132,7 +134,104 @@ api=yes
 # Zone-CR creations get an explicit SOA seeded by the operator anyway.
 default-soa-content=@ hostmaster.@ 0 10800 3600 604800 3600
 loglevel=4
-`, dnsTCPPort, api.Port)
+`, dnsTCPPort, api.Port) + renderExtraSettings(s.Spec.ExtraSettings)
+}
+
+// reservedSettings are the pdns.conf settings the operator owns. A
+// spec.extraSettings entry naming one of these is rejected by
+// ValidateExtraSettings and never rendered: overriding them breaks the
+// managed contract (backend wiring, API access, readiness probes).
+var reservedSettings = map[string]struct{}{
+	"launch":               {},
+	"local-address":        {},
+	"local-port":           {},
+	"webserver":            {},
+	"webserver-address":    {},
+	"webserver-port":       {},
+	"webserver-allow-from": {},
+	"api":                  {},
+	"api-key":              {},
+	"default-soa-content":  {},
+}
+
+// reservedSettingPrefix covers the whole gpgsql-* family (gpgsql-host,
+// gpgsql-password, …) — those are fed from the normalized backend Secret
+// via PDNS_* env vars, so a file-level override would point PowerDNS at a
+// different database than the schema-init Job configured.
+const reservedSettingPrefix = "gpgsql-"
+
+// extraSettingKeyPattern bounds what may appear left of the `=`. PowerDNS
+// setting names are lowercase-with-dashes; anything else (whitespace, `=`,
+// a newline) would let a key smuggle extra config lines into pdns.conf.
+var extraSettingKeyPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
+
+// ValidateExtraSettings returns one message per rejected spec.extraSettings
+// entry, sorted by key. An empty result means every entry is safe to render.
+// Shared by the controller's validateSpec (which fails the spec) and
+// renderExtraSettings (which drops rejected entries), so the rendered
+// pdns.conf can never carry an entry that validation would have refused —
+// including on a spec edited after the server reached Ready, which never
+// re-enters phasePending.
+func ValidateExtraSettings(extra map[string]string) []string {
+	if len(extra) == 0 {
+		return nil
+	}
+	var msgs []string
+	for _, k := range sortedKeys(extra) {
+		if msg := extraSettingViolation(k, extra[k]); msg != "" {
+			msgs = append(msgs, msg)
+		}
+	}
+	return msgs
+}
+
+// extraSettingViolation returns "" when the entry may be rendered.
+func extraSettingViolation(key, value string) string {
+	if !extraSettingKeyPattern.MatchString(key) {
+		return fmt.Sprintf("key %q must match %s", key, extraSettingKeyPattern.String())
+	}
+	if _, reserved := reservedSettings[key]; reserved || strings.HasPrefix(key, reservedSettingPrefix) {
+		return fmt.Sprintf("key %q is managed by the operator and cannot be overridden", key)
+	}
+	if strings.ContainsAny(value, "\r\n") {
+		return fmt.Sprintf("value of %q must not contain newlines", key)
+	}
+	return ""
+}
+
+// renderExtraSettings emits the user-supplied pdns.conf block. Keys are
+// sorted so the output — and therefore status.configHash — is identical
+// across reconcile passes and pods only roll on a real change.
+//
+// Rejected entries are dropped INDIVIDUALLY, deliberately: dropping the
+// whole map because one new entry is malformed would retract settings
+// that are already live (a typo'd tuning key would silently switch off
+// `primary=yes` and stop AXFR). The rejection is never silent — see
+// ValidateExtraSettings' two call sites.
+func renderExtraSettings(extra map[string]string) string {
+	if len(extra) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	for _, k := range sortedKeys(extra) {
+		if extraSettingViolation(k, extra[k]) != "" {
+			continue
+		}
+		if b.Len() == 0 {
+			b.WriteString("# spec.extraSettings\n")
+		}
+		fmt.Fprintf(&b, "%s=%s\n", k, extra[k])
+	}
+	return b.String()
+}
+
+func sortedKeys(m map[string]string) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 // ConfigMap holds pdns.conf for the deployment.
