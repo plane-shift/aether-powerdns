@@ -1,0 +1,50 @@
+# Hidden primary: this server is authoritative for the zone but is never
+# named in the registrar's delegation. An external nameserver (thor,
+# 104.218.120.85) holds the public NS records and replicates the zone by
+# AXFR, so resolvers only ever talk to the external nameserver.
+#
+# Prereqs:
+#   - the external nameserver is configured as a secondary for this zone
+#     with this server's public address as its primary
+#   - the secondary can reach TCP/53 here (AXFR is TCP), and this server
+#     can reach the secondary's UDP/53 (NOTIFY)
+#
+# `primary`/`allow-axfr-ips` are plain pdns.conf settings — PowerDNS
+# refuses to start on unknown ones, and 4.4 and older spell `primary` as
+# `master`, so check them against the image in spec.image.
+apiVersion: dns.aetherplatform.cloud/v1alpha1
+kind: PowerDNSServer
+metadata:
+  name: aether-dns
+  namespace: powerdns
+spec:
+  replicas: 2
+  backend:
+    type: postgres
+    postgres:
+      instances: 1
+      storageSize: 5Gi
+  dns:
+    exposure: loadBalancer
+  extraSettings:
+    # Quote the values: unquoted `yes` is a YAML string, but unquoted
+    # `true`/`5` are not, and the CRD only accepts strings.
+    primary: "yes"                        # bump SOA serial, serve AXFR, send NOTIFY
+    allow-axfr-ips: "104.218.120.85/32"   # ONLY the external secondary
+    # also-notify: "104.218.120.85"       # needed ONLY if the secondary is
+                                          # absent from the zone's NS RRset
+---
+apiVersion: dns.aetherplatform.cloud/v1alpha1
+kind: Zone
+metadata:
+  name: aetherplatform-cloud
+  namespace: powerdns
+spec:
+  serverRef:
+    name: aether-dns
+  zoneName: aetherplatform.cloud.
+  # Primary (not Native) is what makes PowerDNS notify the secondaries
+  # listed in the zone's NS records when a record changes.
+  kind: Primary
+  nameservers:
+    - ns1.example.net.   # the EXTERNAL nameserver — the one the registrar delegates to

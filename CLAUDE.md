@@ -207,6 +207,30 @@ give every string/array a CEL rule touches `maxLength`/`maxItems`, and
 apply new CRDs to a real apiserver before tagging — no local check
 catches this.
 
+## Extra pdns.conf settings
+
+`spec.extraSettings` (map[string]string) appends `key=value` lines to
+pdns.conf after the managed block, **sorted by key** — the config hash
+folds pdns.conf, so a non-deterministic order would roll the pods on
+every reconcile. Primary use case: hidden primary (`primary: "yes"` +
+`allow-axfr-ips`) with a `Zone` of `kind: Primary`.
+
+The reserved-key guard lives in `manifests.ValidateExtraSettings` and is
+consumed twice on purpose: `validateSpec` fails the spec (terminal
+`Failed`, create path), and `renderExtraSettings` DROPS rejected entries
+so the rendered file can never carry one. A spec edited after the server
+reached Ready never re-enters `phasePending` — `phaseReady` therefore
+re-runs the check and emits a Warning event `ExtraSettingsRejected` plus
+an error log, deliberately NOT `setFailed` (terminal would take a live
+DNS server's reconcile offline over a config typo). Keys are bounded to
+`^[a-z0-9][a-z0-9-]*$` and values may not contain newlines — both are
+pdns.conf injection guards, not cosmetics.
+
+Guard is operator-side, NOT CEL: iterating an object of strings is where
+the CEL cost budget bites and it can't be verified locally. The CRD only
+carries `maxProperties`/`maxLength` bounds so such a rule stays
+affordable if ever added.
+
 ## Network policy
 
 `spec.networkPolicy.enabled=true` installs a Kubernetes `NetworkPolicy`:

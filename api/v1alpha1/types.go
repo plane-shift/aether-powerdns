@@ -133,6 +133,37 @@ type PowerDNSServerSpec struct {
 	// of the PDB rendered when replicas > 1.
 	// +optional
 	PodDisruptionBudget *PDBSpec `json:"podDisruptionBudget,omitempty"`
+
+	// ExtraSettings are arbitrary pdns.conf settings appended verbatim
+	// (`key=value`, one per line, sorted by key) after the operator's
+	// managed block. Use it for anything the CRD does not model — most
+	// notably the hidden-primary setup, where an external nameserver
+	// pulls the zone by AXFR while the registrar's NS records never
+	// point at this server:
+	//
+	//	extraSettings:
+	//	  primary: "yes"                        # enable AXFR + NOTIFY
+	//	  allow-axfr-ips: "104.218.120.85/32"   # the external secondary
+	//
+	// Pair that with a `Zone` of `kind: Primary`. NOTIFY is sent to the
+	// zone's own NS records; a secondary that is NOT named in the zone
+	// (a truly hidden one) additionally needs `also-notify`.
+	//
+	// GUARD: settings the operator owns are REJECTED, not merged —
+	// launch, local-address, local-port, webserver, webserver-address,
+	// webserver-port, webserver-allow-from, api, api-key,
+	// default-soa-content and every gpgsql-* key. Overriding those
+	// silently breaks the managed contract (backend wiring, API access,
+	// probes), so the spec is failed instead. Keys must match
+	// `^[a-z0-9][a-z0-9-]*$` and values may not contain newlines —
+	// a newline would inject additional settings into pdns.conf.
+	//
+	// Every change re-renders pdns.conf, which moves status.configHash
+	// and rolls the pods (PowerDNS does not reload at runtime). An
+	// unknown or malformed setting makes pdns refuse to start — verify
+	// against the running image's version before applying.
+	// +optional
+	ExtraSettings map[string]string `json:"extraSettings,omitempty"`
 }
 
 // SchedulingSpec controls where pdns pods land.

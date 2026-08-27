@@ -13,6 +13,7 @@ Each file is a self-contained `kubectl apply -f`-able manifest.
 | `multi-ip-loadbalancer.yaml` | One Deployment, three public IPs — `additionalServices` for per-IP pools / annotations. |
 | `multi-gateway.yaml` | One Deployment fronted by three Gateway API Gateways via TCP/UDPRoute parentRefs. |
 | `api-via-gateway.yaml` | DNS via Gateway API TCP/UDP routes plus the HTTP API via HTTPRoute on a TLS listener. |
+| `hidden-primary.yaml` | Hidden primary: `extraSettings` enables AXFR/NOTIFY for an external secondary that holds the public NS delegation. |
 | `zone-basic.yaml` | Native zone with apex NS seed and three RRSet records (A, A multi-value, MX). |
 | `zone-secondary.yaml` | Secondary zone replicating from external primaries via AXFR/IXFR; RRSet resources rejected. |
 | `zone-dnssec.yaml` | DNSSEC-signed Native zone; DS records appear in `status.dsRecords` for registrar upload. |

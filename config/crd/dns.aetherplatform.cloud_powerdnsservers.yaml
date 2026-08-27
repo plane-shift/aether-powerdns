@@ -236,6 +236,30 @@ spec:
                       type: integer
                       format: int32
                       minimum: 1
+                # Arbitrary pdns.conf settings, appended sorted by key after
+                # the operator's managed block (hidden primary: primary=yes +
+                # allow-axfr-ips). Settings the operator owns (launch,
+                # local-*, webserver*, api, api-key, default-soa-content,
+                # gpgsql-*) are rejected by the operator, not by CEL: a rule
+                # iterating an object of strings is where the CEL cost budget
+                # bites (see CLAUDE.md), and it cannot be tested without a
+                # real apiserver. maxProperties/maxLength are set anyway so
+                # such a rule stays affordable if it is ever added.
+                extraSettings:
+                  type: object
+                  maxProperties: 64
+                  additionalProperties:
+                    type: string
+                    maxLength: 4096
+                  description: >-
+                    Arbitrary pdns.conf settings rendered as key=value after
+                    the managed block, sorted by key. Keys must match
+                    ^[a-z0-9][a-z0-9-]*$ and values must not contain
+                    newlines. Keys the operator owns (launch, local-address,
+                    local-port, webserver, webserver-address, webserver-port,
+                    webserver-allow-from, api, api-key, default-soa-content,
+                    gpgsql-*) are rejected. Any change re-renders pdns.conf
+                    and rolls the pods.
             status:
               type: object
               properties:

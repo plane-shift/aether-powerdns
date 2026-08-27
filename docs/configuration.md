@@ -11,6 +11,7 @@ non-obvious behaviour is called out here.
 | `replicas` | `1` | Reads/writes hit the same backend DB, so all replicas serve identical zones. Bump for HA, not throughput. |
 | `image` | `powerdns/pdns-auth-51` | Floating tag — pin a digest if you need reproducible rollouts. |
 | `resources` | requests `50m`/`128Mi`, limits `512Mi` | Standard `corev1.ResourceRequirements`. |
+| `extraSettings` | _(none)_ | Arbitrary `pdns.conf` `key=value` settings appended after the managed block (hidden primary, tuning). Operator-owned keys are rejected — see [`extraSettings`](#extrasettings--arbitrary-pdnsconf-settings). |
 
 ## `backend`
 
@@ -209,6 +210,128 @@ Egress is intentionally not restricted — the pod must reach Postgres,
 which the operator can't enumerate generically. Keep disabled until you
 have confirmed every API consumer is in an allowlisted namespace.
 
+## `extraSettings` — arbitrary pdns.conf settings
+
+Anything the CRD does not model can be written straight into `pdns.conf`.
+Entries are appended after the operator's managed block, one `key=value`
+per line, **sorted by key** so the rendered file (and therefore
+`status.configHash`) is byte-identical across reconciles.
+
+```yaml
+extraSettings:
+  primary: "yes"
+  allow-axfr-ips: "104.218.120.85/32"
+```
+
+renders:
+
+```text
+# managed by aether-powerdns
+launch=gpgsql
+...
+loglevel=4
+# spec.extraSettings
+allow-axfr-ips=104.218.120.85/32
+primary=yes
+```
+
+Every edit changes `pdns.conf` → the config hash moves → the Deployment
+rolls. PowerDNS does not reload its config at runtime, so that restart is
+the point. Values are YAML strings: quote `"yes"`, or YAML hands the
+operator `true` and the CRD rejects it as a non-string.
+
+**Settings the operator owns are rejected, not merged:**
+
+`launch`, `local-address`, `local-port`, `webserver`, `webserver-address`,
+`webserver-port`, `webserver-allow-from`, `api`, `api-key`,
+`default-soa-content`, and every `gpgsql-*` key.
+
+Overriding those breaks the managed contract — backend wiring, API access,
+the readiness probe. Keys must also match `^[a-z0-9][a-z0-9-]*$` and values
+may not contain newlines (a newline would inject further settings).
+
+A rejected entry on a **new** server fails the spec: `phase=Failed`,
+`status.failureMessage: invalid extraSettings: …`. On a server that is
+already `Ready` the spec never re-enters `phasePending`, so instead the
+entry is dropped from the rendered config and the operator emits a
+Warning event `ExtraSettingsRejected` (visible in `kubectl describe pdns`)
+plus an error log — a live server is never wedged into the terminal
+`Failed` phase over a config typo.
+
+PowerDNS itself refuses to start on an unknown or malformed setting, and
+setting names move between releases (`master`/`slave` became
+`primary`/`secondary` in 4.5). Check the setting against the exact image
+in `spec.image` before applying — the pods will CrashLoopBackOff
+otherwise.
+
+If a server does end up in the terminal `Failed` phase (a bad setting on
+FIRST bring-up, before the `Ready` guard exists), recovery is manual by
+design: fix the spec, then clear the phase so reconciliation restarts —
+`kubectl -n powerdns patch pdns <name> --subresource=status --type=merge
+-p '{"status":{"phase":""}}'` — or delete and recreate the CR (the
+PostgreSQL backend and its PVCs are separate objects and survive either
+route, so no zone data is lost).
+
+### Hidden primary (external secondary pulls by AXFR)
+
+The registrar's NS records point at an external nameserver; this server is
+the authoritative source and is never queried directly by resolvers. The
+external nameserver replicates the zone over AXFR.
+
+```yaml
+apiVersion: dns.aetherplatform.cloud/v1alpha1
+kind: PowerDNSServer
+metadata:
+  name: aether-dns
+  namespace: powerdns
+spec:
+  backend:
+    type: postgres
+    postgres:
+      instances: 1
+      storageSize: 5Gi
+  dns:
+    exposure: loadBalancer                # the external secondary pulls AXFR
+                                          # over TCP/53 from OUTSIDE the
+                                          # cluster — the default ClusterIP
+                                          # Service is unreachable for it.
+                                          # Gateway TCPRoute exposure works
+                                          # too; ClusterIP does not.
+  extraSettings:
+    primary: "yes"                        # serve AXFR + send NOTIFY
+    allow-axfr-ips: "104.218.120.85/32"   # ONLY the external secondary
+---
+apiVersion: dns.aetherplatform.cloud/v1alpha1
+kind: Zone
+metadata:
+  name: aetherplatform-cloud
+  namespace: powerdns
+spec:
+  serverRef:
+    name: aether-dns
+  zoneName: aetherplatform.cloud.
+  kind: Primary                           # Native serves but never notifies
+  nameservers:
+    - ns1.example.net.                    # the external, public nameserver
+```
+
+- `kind: Primary` is what makes PowerDNS bump the serial and send NOTIFY
+  on change; a `Native` zone is served but never announced.
+- **NOTIFY targets the zone's own NS records** (minus itself). The
+  hidden-primary setup works precisely because the public nameserver is
+  named in the zone's NS RRset even though the primary is not. A
+  secondary that is deliberately absent from the NS RRset gets nothing —
+  add `also-notify: "<ip>"` to `extraSettings` for that case.
+- `allow-axfr-ips` is the ACL for **unsigned** AXFR: it defaults to
+  loopback only, so without it an external secondary is refused, and
+  widened to `0.0.0.0/0` it hands the entire zone to anyone who asks.
+  It is not the only door — a client presenting a TSIG key listed in the
+  zone's `TSIG-ALLOW-AXFR` metadata is authorised regardless of its IP.
+  This operator does not manage TSIG keys, so on a server whose zones
+  carry no such metadata the IP list is in practice the whole ACL.
+- The secondary must be able to reach TCP/53 (AXFR is TCP), and the
+  primary must be able to reach the secondary's UDP/53 for NOTIFY.
+
 ## CEL validations enforced at admission
 
 - `backend.type` is immutable after creation. To swap backends, delete
@@ -216,6 +339,11 @@ have confirmed every API consumer is in an allowlisted namespace.
   persists them).
 - `dns.exposure=gateway` requires `dns.gateway` to be set (also enforced
   by the operator as a safety net).
+- `extraSettings` is bounded at admission (64 entries, 4096 chars per
+  value, string values only) but the reserved-key guard itself is
+  **operator-side**, not CEL: a rule iterating an object of strings is
+  where the CEL cost budget bites, and it cannot be verified without a
+  real apiserver.
 
 ## Status fields
 
