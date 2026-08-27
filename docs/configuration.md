@@ -264,6 +264,14 @@ setting names move between releases (`master`/`slave` became
 in `spec.image` before applying — the pods will CrashLoopBackOff
 otherwise.
 
+If a server does end up in the terminal `Failed` phase (a bad setting on
+FIRST bring-up, before the `Ready` guard exists), recovery is manual by
+design: fix the spec, then clear the phase so reconciliation restarts —
+`kubectl -n powerdns patch pdns <name> --subresource=status --type=merge
+-p '{"status":{"phase":""}}'` — or delete and recreate the CR (the
+PostgreSQL backend and its PVCs are separate objects and survive either
+route, so no zone data is lost).
+
 ### Hidden primary (external secondary pulls by AXFR)
 
 The registrar's NS records point at an external nameserver; this server is
@@ -282,6 +290,13 @@ spec:
     postgres:
       instances: 1
       storageSize: 5Gi
+  dns:
+    exposure: loadBalancer                # the external secondary pulls AXFR
+                                          # over TCP/53 from OUTSIDE the
+                                          # cluster — the default ClusterIP
+                                          # Service is unreachable for it.
+                                          # Gateway TCPRoute exposure works
+                                          # too; ClusterIP does not.
   extraSettings:
     primary: "yes"                        # serve AXFR + send NOTIFY
     allow-axfr-ips: "104.218.120.85/32"   # ONLY the external secondary
